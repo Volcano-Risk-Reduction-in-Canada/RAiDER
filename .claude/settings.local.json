@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python *)",
+      "Bash(conda env *)",
+      "Bash(conda run *)",
+      "Bash(/Users/drotheram/anaconda3/envs/RAiDER/bin/python *)",
+      "Bash(python3 -m py_compile /Users/drotheram/GitHub/RAiDER/tools/RAiDER/models/hrdps.py)",
+      "Bash(python3 -m py_compile /Users/drotheram/GitHub/RAiDER/tools/RAiDER/models/allowed.py)",
+      "Bash(python3 -m py_compile /Users/drotheram/GitHub/RAiDER/tools/RAiDER/models/__init__.py)",
+      "Bash(conda-lock install *)"
+    ]
+  }
+}
