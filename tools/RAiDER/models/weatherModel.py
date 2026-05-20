@@ -27,6 +27,7 @@ TIME_RES = {
     'ECMWF': 1,
     'HRES': 6,
     'HRRR': 1,
+    'HRDPS': 1,
     'WRF': 1,
     'NCMR': 1,
     'HRRR-AK': 3,

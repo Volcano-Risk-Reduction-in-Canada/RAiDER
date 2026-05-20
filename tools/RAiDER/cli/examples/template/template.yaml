@@ -26,7 +26,7 @@ look_dir: right
 ## FORMATS: string, Select name from list below
 ##
 ## Currently implemented weather models include:
-## ERA-5, ERA-5T, HRES, NCMR, HRRR, GMAO, MERRA-2
+## ERA-5, ERA-5T, HRES, NCMR, HRRR, HRDPS, GMAO, MERRA-2
 ## See https://github.com/dbekaert/RAiDER/blob/10686ee3f3533a33ca0788d866003c363f58fd5e/WeatherModels.md
 ## for more details and information on licensing
 weather_model:
