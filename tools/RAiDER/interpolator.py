@@ -122,7 +122,7 @@ def fillna3D(array, axis=-1, fill_value=0.0):
     narr = np.moveaxis(array, axis, -1)
     nars = narr.reshape((np.prod(narr.shape[:-1]),) + (narr.shape[-1],))
     dfd = pd.DataFrame(data=nars).interpolate(axis=1, limit_direction='backward')
-    out = dfd.values.reshape(array.shape)
+    out = dfd.to_numpy(copy=True).reshape(array.shape)
 
     # fill upper NaNs with 0s
     outmat = np.moveaxis(out, -1, axis)
