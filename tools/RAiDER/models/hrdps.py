@@ -160,24 +160,24 @@ def load_weather_hrdps(filename):
     ds = xr.open_dataset(filename, engine='netcdf4')
 
     # Transpose (levels, y, x) → (y, x, levels) — RAiDER convention
-    pres    = ds['pres'].values.transpose(1, 2, 0)
-    temps   = ds['t'].values.transpose(1, 2, 0)
-    qs      = ds['q'].values.transpose(1, 2, 0)
-    geo_hgt = ds['z'].values.transpose(1, 2, 0)
-    lats    = ds['latitude'].values   # 2D geographic lat
-    lons    = ds['longitude'].values  # 2D geographic lon
+    pres    = ds['pres'].values.transpose(1, 2, 0).copy()
+    temps   = ds['t'].values.transpose(1, 2, 0).copy()
+    qs      = ds['q'].values.transpose(1, 2, 0).copy()
+    geo_hgt = ds['z'].values.transpose(1, 2, 0).copy()
+    lats    = ds['latitude'].values.copy()   # 2D geographic lat
+    lons    = ds['longitude'].values.copy()  # 2D geographic lon
 
     # 1D coordinate arrays stored at download time (row-mean lat, col-mean lon)
-    xArr = ds['x'].values  # shape (nx,)
-    yArr = ds['y'].values  # shape (ny,)
+    xArr = ds['x'].values.copy()  # shape (nx,)
+    yArr = ds['y'].values.copy()  # shape (ny,)
 
     proj = CRS.from_cf(ds['proj'].attrs)
     lons[lons > 180] -= 360
     xArr[xArr > 180] -= 360
 
     # Broadcast 1D arrays to 3D — matches what HRRR does
-    _xs = np.broadcast_to(xArr[np.newaxis, :, np.newaxis], geo_hgt.shape)
-    _ys = np.broadcast_to(yArr[:, np.newaxis, np.newaxis], geo_hgt.shape)
+    _xs = np.broadcast_to(xArr[np.newaxis, :, np.newaxis], geo_hgt.shape).copy() 
+    _ys = np.broadcast_to(yArr[:, np.newaxis, np.newaxis], geo_hgt.shape).copy() 
 
     return _xs, _ys, lons, lats, qs, temps, pres, geo_hgt, proj
 
