@@ -37,3 +37,4 @@ orbits/
 .coverage*
 venv
 test/hrdms_testing
+test/hrdps_test_output

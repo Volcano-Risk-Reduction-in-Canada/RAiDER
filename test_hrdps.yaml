@@ -2,15 +2,15 @@ look_dir: right
 weather_model: HRDPS
 
 date_group:
-  date_start: 20260516
+  date_start: 20260519
 
 time_group:
-  time: 00:00:00
+  time: 14:24:11
 
 aoi_group:
-  bounding_box: 49 50 -124 -123
+  bounding_box: 49.77 50.14 -123.29 -122.89
 
 runtime_group:
   verbose: True
   file_format: GTiff
-  output_directory: ./hrdps_test_output
+  output_directory: ./test/hrdps_test_output
