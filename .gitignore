@@ -35,4 +35,5 @@ orbits/
 /GUNW*.yaml
 /*.tif
 .coverage*
-hrdps_test_output/
+venv
+test/hrdms_testing
