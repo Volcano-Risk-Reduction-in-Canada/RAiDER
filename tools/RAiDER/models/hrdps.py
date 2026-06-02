@@ -30,25 +30,45 @@ _MSC_BASE = 'https://dd.weather.gc.ca/{date:%Y%m%d}/WXO-DD/model_hrdps/{product}
 _MSC_FNAME = '{date:%Y%m%dT%HZ}_MSC_HRDPS_{variable}_{level}_RLatLon0.0225_PT{fxx:03d}H.grib2'
 
 
+_DOWNLOAD_TIMEOUT = 180      # seconds per request attempt
+_DOWNLOAD_RETRIES = 3        # total attempts before giving up
+_DOWNLOAD_RETRY_WAIT = 10    # seconds between retries
+
+
 def _fetch_grib(date: dt.datetime, variable: str, level: str, fxx: int,
                 product: str, save_dir: Path, overwrite: bool = False) -> Path:
     """Download one HRDPS GRIB2 file from MSC Datamart and return its local path."""
+    import time
     fname = _MSC_FNAME.format(date=date, variable=variable, level=level, fxx=fxx)
     local = save_dir / fname
-    if local.exists() and not overwrite:
+    if local.exists() and local.stat().st_size > 0 and not overwrite:
         return local
 
     url = _MSC_BASE.format(date=date, product=product, fxx=fxx) + '/' + fname
-    logger.debug('Fetching %s', url)
-    r = requests.get(url, stream=True, timeout=120)
-    if r.status_code == 404:
-        raise NoWeatherModelData(f'HRDPS file not found on MSC Datamart: {url}')
-    r.raise_for_status()
-    local.parent.mkdir(parents=True, exist_ok=True)
-    with open(local, 'wb') as f:
-        for chunk in r.iter_content(chunk_size=65536):
-            f.write(chunk)
-    return local
+    logger.info('Fetching %s', url)
+
+    for attempt in range(1, _DOWNLOAD_RETRIES + 1):
+        try:
+            r = requests.get(url, stream=True, timeout=_DOWNLOAD_TIMEOUT)
+            if r.status_code == 404:
+                raise NoWeatherModelData(f'HRDPS file not found on MSC Datamart: {url}')
+            r.raise_for_status()
+            with open(local, 'wb') as f:
+                for chunk in r.iter_content(chunk_size=65536):
+                    f.write(chunk)
+            return local
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            local.unlink(missing_ok=True)  # remove any partial file
+            if attempt == _DOWNLOAD_RETRIES:
+                raise
+            logger.warning('Download attempt %d/%d failed (%s), retrying in %ds...',
+                           attempt, _DOWNLOAD_RETRIES, e, _DOWNLOAD_RETRY_WAIT)
+            time.sleep(_DOWNLOAD_RETRY_WAIT)
+        except Exception:
+            local.unlink(missing_ok=True)
+            raise
+
+    return local  # unreachable, satisfies type checkers
 
 
 def check_hrdps_dataset_availability(datetime: dt.datetime) -> bool:
@@ -79,6 +99,8 @@ def download_hrdps_file(ll_bounds, DATE, out: Path, product='continental/2.5km',
         verbose (bool)      - Log each file download
     """
     save_dir = out.parent / 'hrdps_grib' / DATE.strftime('%Y%m%d')
+    if save_dir.exists() and not save_dir.is_dir():
+        save_dir.unlink()
     save_dir.mkdir(parents=True, exist_ok=True)
 
     var_grib_to_nc = {'TMP': 't', 'SPFH': 'q', 'HGT': 'z'}

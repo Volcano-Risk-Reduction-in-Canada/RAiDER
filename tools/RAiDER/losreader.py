@@ -115,22 +115,26 @@ class Conventional(LOS):
             raise ValueError('LOS file not set')
 
         try:
-            # if an ISCE-style los file is passed open it with GDAL
-            data, _ = rio_open(self._file)
-            LOS_enu = inc_hd_to_enu(*data)
+            import rasterio
+            in_shape = self._lats.shape
+            coords = list(zip(self._lons.ravel(), self._lats.ravel()))
+            with rasterio.open(self._file) as src:
+                sampled = np.array(list(src.sample(coords, masked=True)), dtype=np.float32)
+            # sampled shape: (npts, nbands) — unpack incidence and heading
+            incidence = sampled[:, 0].reshape(in_shape)
+            heading   = sampled[:, 1].reshape(in_shape) if sampled.shape[1] > 1 else np.zeros(in_shape)
+            incidence[incidence == 0] = np.nan
+            LOS_enu = inc_hd_to_enu(incidence, heading)
 
-        except (OSError, TypeError):
-            # Otherwise, treat it as an orbit / statevector file
+        except (OSError, TypeError, ImportError):
+            # Fall back to orbit / statevector file
             svs = np.stack(get_sv(self._file, self._time, self._pad), axis=-1)
             LOS_enu = state_to_los(
                 svs,
                 [self._lats, self._lons, self._heights],
             )
 
-        if delays.shape == LOS_enu.shape:
-            return delays / LOS_enu
-        else:
-            return delays / LOS_enu[..., -1]
+        return delays / LOS_enu[..., -1]
 
 
 class Raytracing(LOS):

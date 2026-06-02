@@ -641,8 +641,32 @@ class WeatherModel(ABC):
         self._e = interpolate_along_axis(self._zs, self._e, new_zs, axis=2, fill_value=np.nan).astype(np.float32)
 
         self._zs = _zlevels
+
+        # np.unique sorts ascending; if the original y axis was descending
+        # (e.g. HRDPS GRIB scans N→S), the data rows must be reordered to
+        # match so the interpolator doesn't sample the wrong latitude band.
+        # Extract one y-value per row regardless of _ys dimensionality:
+        #   3D (ny, nx, nz) — broadcast array from HRDPS/HRRR
+        #   2D (ny, nx)     — meshgrid array from ECMWF/GMAO
+        #   1D (ny,)        — plain 1-D array from MERRA2 etc.
+        if self._ys.ndim == 3:
+            ys_1d = self._ys[:, 0, 0]
+        elif self._ys.ndim == 2:
+            ys_1d = self._ys[:, 0]
+        else:
+            ys_1d = self._ys
+        y_sort = np.argsort(ys_1d)
         self._xs = np.unique(self._xs)
         self._ys = np.unique(self._ys)
+
+        if not np.array_equal(y_sort, np.arange(len(y_sort))):
+            self._t = self._t[y_sort, :, :]
+            self._p = self._p[y_sort, :, :]
+            self._e = self._e[y_sort, :, :]
+            if self._lats is not None and np.ndim(self._lats) >= 2:
+                self._lats = self._lats[y_sort, :]
+            if self._lons is not None and np.ndim(self._lons) >= 2:
+                self._lons = self._lons[y_sort, :]
 
     def _checkForNans(self) -> None:
         """Fill in NaN-values."""

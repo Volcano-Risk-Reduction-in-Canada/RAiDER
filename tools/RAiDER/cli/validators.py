@@ -133,7 +133,7 @@ def get_heights(height_group: HeightGroupUnparsed, aoi_group: AOIGroupUnparsed, 
     return result
 
 
-def get_query_region(aoi_group: AOIGroupUnparsed, height_group: HeightGroupUnparsed, cube_spacing_in_m: float) -> AOI:
+def get_query_region(aoi_group: AOIGroupUnparsed, height_group: Union[HeightGroupUnparsed, HeightGroup], cube_spacing_in_m: float) -> AOI:
     """Parse the query region from inputs.
     
     This function determines the query region from the input parameters. It will return an AOI object that can be used
@@ -143,7 +143,35 @@ def get_query_region(aoi_group: AOIGroupUnparsed, height_group: HeightGroupUnpar
     # Get bounds from the inputs
     # make sure this is first
     if height_group.use_dem_latlon:
-        query = GeocodedFile(Path(height_group.dem), is_dem=True, cube_spacing_in_m=cube_spacing_in_m)
+        dem_path = Path(height_group.dem)
+        if not dem_path.exists():
+            if aoi_group.bounding_box is None:
+                raise ValueError('use_dem_latlon requires either an existing dem or a bounding_box to download GLO-30')
+            from RAiDER.dem import download_dem
+            ll_bounds = parse_bbox(aoi_group.bounding_box)
+            dem_path.parent.mkdir(parents=True, exist_ok=True)
+            download_dem(ll_bounds=ll_bounds, dem_path=dem_path, writeDEM=True)
+
+        if aoi_group.bounding_box is not None:
+            import rasterio
+            from rasterio.mask import mask as rio_mask
+            from shapely.geometry import box
+            S, N, W, E = parse_bbox(aoi_group.bounding_box)
+            clipped_path = dem_path.with_stem(dem_path.stem + '_clipped')
+            if not clipped_path.exists():
+                with rasterio.open(dem_path) as src:
+                    out_image, out_transform = rio_mask(src, [box(W, S, E, N)], crop=True)
+                    out_meta = src.meta.copy()
+                    out_meta.update({
+                        'height': out_image.shape[1],
+                        'width': out_image.shape[2],
+                        'transform': out_transform,
+                    })
+                with rasterio.open(clipped_path, 'w', **out_meta) as dst:
+                    dst.write(out_image)
+            dem_path = clipped_path
+
+        query = GeocodedFile(dem_path, is_dem=True, cube_spacing_in_m=cube_spacing_in_m)
 
     elif aoi_group.lat_file is not None or aoi_group.lon_file is not None:
         if aoi_group.lat_file is None or aoi_group.lon_file is None:

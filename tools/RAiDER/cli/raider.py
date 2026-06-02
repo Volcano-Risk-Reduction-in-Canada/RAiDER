@@ -116,10 +116,18 @@ def read_run_config_file(path: Path) -> RunConfig:
     height_group_unparsed = HeightGroupUnparsed(**yaml_data['height_group'])
     aoi_group_unparsed = AOIGroupUnparsed(**yaml_data['aoi_group'])
     runtime_group = RuntimeGroup(**yaml_data['runtime_group'])
+
+    # get_heights must run before get_query_region so that the default GLO-30
+    # DEM path is resolved before use_dem_latlon tries to open it
+    height_group = get_heights(
+        height_group=height_group_unparsed,
+        aoi_group=aoi_group_unparsed,
+        runtime_group=runtime_group,
+    )
     aoi_group = AOIGroup(
         aoi=get_query_region(
             aoi_group_unparsed,
-            height_group_unparsed,
+            height_group,
             cube_spacing_in_m=runtime_group.cube_spacing_in_m,
         )
     )
@@ -130,11 +138,7 @@ def read_run_config_file(path: Path) -> RunConfig:
         date_group=parse_dates(DateGroupUnparsed(**yaml_data['date_group'])),
         time_group=TimeGroup(**yaml_data['time_group']),
         aoi_group=aoi_group,
-        height_group=get_heights(
-            height_group=height_group_unparsed,
-            aoi_group=aoi_group_unparsed,
-            runtime_group=runtime_group,
-        ),
+        height_group=height_group,
         los_group=LOSGroup(
             los=get_los(LOSGroupUnparsed(**yaml_data['los_group'])),
             **yaml_data['los_group']

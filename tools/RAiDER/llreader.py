@@ -340,13 +340,15 @@ class GeocodedFile(AOI):
             self.crs = None
 
     def readLL(self) -> tuple[np.ndarray, np.ndarray]:
-        # ll_bounds are SNWE
-        S, N, W, E = self._bounding_box
+        # Use the stored geotransform (never modified by add_buffer) to compute
+        # pixel-center coordinates.  _bounding_box is expanded by add_buffer()
+        # and must NOT be used here — it would shift query points northward by
+        # the buffer distance (~6 km for HRDPS), causing an apparent southward
+        # shift in the output delay field.
+        gt = self._geotransform  # GDAL tuple: (origin_x, dx, 0, origin_y, 0, dy)
         w, h = self.p['width'], self.p['height']
-        px = (E - W) / w
-        py = (N - S) / h
-        x = np.array([W + (t * px) for t in range(w)])
-        y = np.array([S + (t * py) for t in range(h)])
+        x = gt[0] + (np.arange(w) + 0.5) * gt[1]
+        y = gt[3] + (np.arange(h) + 0.5) * gt[5]
         X, Y = np.meshgrid(x, y)
         return Y, X  # lats, lons
 
