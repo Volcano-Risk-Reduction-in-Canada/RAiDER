@@ -143,7 +143,12 @@ def get_query_region(aoi_group: AOIGroupUnparsed, height_group: Union[HeightGrou
     # Get bounds from the inputs
     # make sure this is first
     if height_group.use_dem_latlon:
-        dem_path = Path(height_group.dem)
+        dem_path = Path(height_group.dem) if height_group.dem is not None else None
+        if dem_path is None:
+            if aoi_group.bounding_box is None:
+                raise ValueError('use_dem_latlon requires either an existing dem or a bounding_box to download GLO-30')
+            # Use default GLO30.dem path
+            dem_path = Path('GLO30.dem')
         if not dem_path.exists():
             if aoi_group.bounding_box is None:
                 raise ValueError('use_dem_latlon requires either an existing dem or a bounding_box to download GLO-30')
