@@ -120,7 +120,8 @@ def parse_product_xml(zf):
 
     return dict(
         date_str=center_dt.strftime('%Y%m%d'),
-        time_str=center_dt.strftime('%H:%M:%S'),
+        start_time_str=first_dt.strftime('%H:%M:%S'),
+        center_time_str=center_dt.strftime('%H:%M:%S'),
         end_time_str=last_dt.strftime('%H:%M:%S'),
         bbox_snwe=bbox_snwe,
         pass_dir=pass_dir,
@@ -215,7 +216,7 @@ def make_incidence_tif(meta, inc_by_pixel, out_path, res_deg=0.002):
 # YAML
 # --------------------------------------------------------------------------- #
 
-def write_yaml(meta, inc_tif_path, template_path, out_dir):
+def write_yaml(meta, inc_tif_path, template_path, out_dir, interpolate_time='none'):
     """Write a populated RAiDER YAML for the scene."""
     with open(template_path) as f:
         cfg = yaml.safe_load(f)
@@ -230,9 +231,9 @@ def write_yaml(meta, inc_tif_path, template_path, out_dir):
         'date_list': [int(meta['date_str'])],
     }
     cfg['time_group'] = {
-        'time':             meta['time_str'],
+        'time':             meta['start_time_str'],
         'end_time':         meta['end_time_str'],
-        'interpolate_time': 'center_time',
+        'interpolate_time': interpolate_time,
     }
     cfg['aoi_group'] = {
         'bounding_box':  [round(S, 4), round(N, 4), round(W, 4), round(E, 4)],
@@ -268,7 +269,7 @@ def write_yaml(meta, inc_tif_path, template_path, out_dir):
 # Main
 # --------------------------------------------------------------------------- #
 
-def process_zip(zip_path, template_path, res_deg):
+def process_zip(zip_path, template_path, res_deg, interpolate_time='none'):
     out_dir = zip_path.parent
     print(f'\nProcessing: {zip_path.name}')
 
@@ -276,14 +277,14 @@ def process_zip(zip_path, template_path, res_deg):
         meta         = parse_product_xml(zf)
         inc_by_pixel = parse_incidence_angles(zf)
 
-    print(f'  Date/time : {meta["date_str"]}  {meta["time_str"]} – {meta["end_time_str"]} UTC')
+    print(f'  Date/time : {meta["date_str"]}  {meta["start_time_str"]} – {meta["end_time_str"]} UTC  (center {meta["center_time_str"]})')
     print(f'  Bbox SNWE : {[round(v,4) for v in meta["bbox_snwe"]]}')
     print(f'  Pass/look : {meta["pass_dir"]}, {meta["look_dir"]}-looking  '
           f'(look heading {meta["heading_deg"]:.1f}°)')
 
     inc_tif = out_dir / f"{meta['date_str']}_incidence.tif"
     make_incidence_tif(meta, inc_by_pixel, inc_tif, res_deg=res_deg)
-    write_yaml(meta, inc_tif, template_path, out_dir)
+    write_yaml(meta, inc_tif, template_path, out_dir, interpolate_time=interpolate_time)
 
 
 def main():
@@ -303,6 +304,10 @@ def main():
                         help='Path to template.yaml (default: template.yaml)')
     parser.add_argument('--res',      type=float, default=0.002,
                         help='Output grid resolution in degrees (default: 0.002 ≈ 220 m)')
+    parser.add_argument('--interpolate-time', dest='interpolate_time',
+                        choices=['none', 'center_time', 'azimuth_time_grid'],
+                        default='none',
+                        help='RAiDER time interpolation method (default: none)')
     args = parser.parse_args()
 
     zips = []
@@ -320,7 +325,7 @@ def main():
             raise SystemExit(f'Expected a .zip file or directory, got: {inp}')
 
     for zp in zips:
-        process_zip(zp, args.template, args.res)
+        process_zip(zp, args.template, args.res, interpolate_time=args.interpolate_time)
 
     print('\nDone.')
 
