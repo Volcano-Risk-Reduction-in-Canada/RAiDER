@@ -72,8 +72,10 @@ def parse_product_xml(zf):
     root = _open_xml(zf, 'metadata/product.xml')
 
     # --- timing ---
-    center_str = root.find('.//r:zeroDopplerAzimuthTime', _NS).text
-    last_str   = root.find('.//r:zeroDopplerTimeLastLine', _NS).text
+    first_str  = root.find('.//r:zeroDopplerTimeFirstLine', _NS).text
+    center_str = root.find('.//r:zeroDopplerAzimuthTime',   _NS).text
+    last_str   = root.find('.//r:zeroDopplerTimeLastLine',  _NS).text
+    first_dt   = datetime.strptime(first_str,  '%Y-%m-%dT%H:%M:%S.%fZ')
     center_dt  = datetime.strptime(center_str, '%Y-%m-%dT%H:%M:%S.%fZ')
     last_dt    = datetime.strptime(last_str,   '%Y-%m-%dT%H:%M:%S.%fZ')
 
