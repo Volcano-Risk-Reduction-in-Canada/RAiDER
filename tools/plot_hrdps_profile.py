@@ -28,6 +28,79 @@ import numpy as np
 import xarray as xr
 from scipy.interpolate import RegularGridInterpolator
 
+try:
+    import contextily as ctx
+    _HAVE_CONTEXTILY = True
+except ImportError:
+    _HAVE_CONTEXTILY = False
+
+
+# --------------------------------------------------------------------------- #
+def plot_map(lat0, lon0, lat1, lon1, out_png=None):
+    """
+    Save (or show) a map PNG of the two profile endpoints connected by a line.
+
+    Uses a contextily tile basemap when available; falls back to a plain
+    axes with gridlines.
+    """
+    pad = max(abs(lat1 - lat0), abs(lon1 - lon0)) * 0.4 + 0.05
+
+    fig, ax = plt.subplots(figsize=(6, 6))
+
+    if _HAVE_CONTEXTILY:
+        import pyproj
+        transformer = pyproj.Transformer.from_crs('EPSG:4326', 'EPSG:3857', always_xy=True)
+
+        x0, y0 = transformer.transform(lon0, lat0)
+        x1, y1 = transformer.transform(lon1, lat1)
+
+        # profile line + endpoints
+        ax.plot([x0, x1], [y0, y1], '-', color='crimson', lw=2, zorder=5)
+        ax.plot([x0, x1], [y0, y1], 'o', color='crimson', ms=8, zorder=6)
+
+        # labels
+        offset = max(abs(y1 - y0), abs(x1 - x0)) * 0.04 + 500
+        ax.text(x0, y0 + offset, 'A', ha='center', va='bottom',
+                fontsize=12, fontweight='bold', color='crimson', zorder=7)
+        ax.text(x1, y1 + offset, 'B', ha='center', va='bottom',
+                fontsize=12, fontweight='bold', color='crimson', zorder=7)
+
+        # set extent before adding tiles
+        xs = [x0, x1];  ys = [y0, y1]
+        pad_m = pad * 111_000
+        ax.set_xlim(min(xs) - pad_m, max(xs) + pad_m)
+        ax.set_ylim(min(ys) - pad_m, max(ys) + pad_m)
+
+        ctx.add_basemap(ax, crs='EPSG:3857', source=ctx.providers.OpenStreetMap.Mapnik, zoom='auto')
+        ax.set_axis_off()
+    else:
+        # plain fallback
+        ax.plot([lon0, lon1], [lat0, lat1], '-', color='crimson', lw=2)
+        ax.plot([lon0, lon1], [lat0, lat1], 'o', color='crimson', ms=8)
+        offset = pad * 0.1
+        ax.text(lon0, lat0 + offset, 'A', ha='center', va='bottom',
+                fontsize=12, fontweight='bold', color='crimson')
+        ax.text(lon1, lat1 + offset, 'B', ha='center', va='bottom',
+                fontsize=12, fontweight='bold', color='crimson')
+        ax.set_xlim(min(lon0, lon1) - pad, max(lon0, lon1) + pad)
+        ax.set_ylim(min(lat0, lat1) - pad, max(lat0, lat1) + pad)
+        ax.set_xlabel('Longitude (°E)')
+        ax.set_ylabel('Latitude (°N)')
+        ax.grid(True, linestyle='--', alpha=0.5)
+
+    ax.set_title(
+        f'Profile: A ({lat0:.4f}°N, {lon0:.4f}°E) → B ({lat1:.4f}°N, {lon1:.4f}°E)',
+        fontsize=9,
+    )
+    plt.tight_layout()
+
+    if out_png:
+        plt.savefig(out_png, dpi=150, bbox_inches='tight')
+        print(f'Saved map: {out_png}')
+    else:
+        plt.show()
+    plt.close(fig)
+
 
 # --------------------------------------------------------------------------- #
 def profile_points(lat0, lon0, lat1, lon1, n):
@@ -196,6 +269,8 @@ def plot_profile(
     if out_png:
         plt.savefig(out_png, dpi=150)
         print(f'Saved: {out_png}')
+        map_png = Path(out_png).with_stem(Path(out_png).stem + '_map')
+        plot_map(lat0, lon0, lat1, lon1, out_png=str(map_png))
     else:
         plt.show()
 
