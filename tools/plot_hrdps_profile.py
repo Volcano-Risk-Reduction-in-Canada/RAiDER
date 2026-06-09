@@ -72,7 +72,18 @@ def plot_map(lat0, lon0, lat1, lon1, out_png=None):
         ax.set_ylim(min(ys) - pad_m, max(ys) + pad_m)
 
         ctx.add_basemap(ax, crs='EPSG:3857', source=ctx.providers.OpenStreetMap.Mapnik, zoom='auto')
-        ax.set_axis_off()
+
+        # Reformat Web-Mercator tick positions as geographic lat/lon labels
+        inv = pyproj.Transformer.from_crs('EPSG:3857', 'EPSG:4326', always_xy=True)
+        ax.xaxis.set_major_formatter(
+            plt.FuncFormatter(lambda v, _: f'{inv.transform(v, 0)[0]:.3f}°E')
+        )
+        ax.yaxis.set_major_formatter(
+            plt.FuncFormatter(lambda v, _: f'{inv.transform(0, v)[1]:.3f}°N')
+        )
+        ax.tick_params(labelsize=7)
+        ax.set_xlabel('Longitude', fontsize=8)
+        ax.set_ylabel('Latitude', fontsize=8)
     else:
         # plain fallback
         ax.plot([lon0, lon1], [lat0, lat1], '-', color='crimson', lw=2)
