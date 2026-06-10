@@ -632,6 +632,15 @@ class WeatherModel(ABC):
                 _zlevels = self._zlevels
             except:
                 _zlevels = np.nanmean(self._zs, axis=(0, 1))
+                # Clamp the topmost target level to the minimum top-level height
+                # across all pixels. This guarantees every pixel has valid data at
+                # the top of the z-grid so no extrapolation NaN → fill artifacts
+                # corrupt the ZTD integration when model-top geopotential heights
+                # vary spatially (e.g. HRDPS pressure-level grids).
+                if self._zs.ndim == 3:
+                    top_min = np.nanmin(self._zs[:, :, -1])
+                    if top_min > _zlevels[-2]:
+                        _zlevels[-1] = top_min
 
         new_zs = np.tile(_zlevels, (nx, ny, 1))
 
