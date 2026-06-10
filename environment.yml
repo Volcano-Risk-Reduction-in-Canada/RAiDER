@@ -25,6 +25,7 @@ dependencies:
  - herbie-data<2025.2.1
  - isce3>=0.15.0
  - lxml
+ - contextily
  - matplotlib
  - netcdf4
  - numpy
