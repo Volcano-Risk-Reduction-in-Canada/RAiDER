@@ -118,11 +118,13 @@ def parse_product_xml(zf):
     else:
         heading_deg = 78.0  # fallback: descending right-looking
 
+    acq_start = min(first_dt, last_dt)
+    acq_end   = max(first_dt, last_dt)
     return dict(
         date_str=center_dt.strftime('%Y%m%d'),
-        start_time_str=first_dt.strftime('%H:%M:%S'),
+        start_time_str=acq_start.strftime('%H:%M:%S'),
         center_time_str=center_dt.strftime('%H:%M:%S'),
-        end_time_str=last_dt.strftime('%H:%M:%S'),
+        end_time_str=acq_end.strftime('%H:%M:%S'),
         bbox_snwe=bbox_snwe,
         pass_dir=pass_dir,
         look_dir=look_dir,
