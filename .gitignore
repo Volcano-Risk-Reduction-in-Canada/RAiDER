@@ -38,3 +38,6 @@ orbits/
 venv
 test/hrdms_testing
 test/hrdps_*
+test/test_nazko_*
+test/*
+.claude/settings.local.json
