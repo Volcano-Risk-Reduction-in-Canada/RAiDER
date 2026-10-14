@@ -18,14 +18,14 @@ def test_generate_dry_run_writes_nothing(fake_workdir, capsys):
     wd, aois = fake_workdir
     before = _snapshot(wd)
     rc = generate.main(['--workdir', str(wd), '--aois', *[a.name for a in aois], '--n-train', '20', '--n-val', '2',
-                        '--dry-run', '--no-probe'])
+                        '--dry-run', '--no-probe', '--chip-size', '500'])
     assert rc == 0
     assert _snapshot(wd) == before
     out = capsys.readouterr().out
-    assert 'Uncompressed output' in out and 'nothing was written' in out
+    assert 'Scenes, uncompressed' in out and 'nothing was written' in out
+    assert '24 per scene' in out and '528 in total' in out
 
 
-@pytest.mark.skipif(not os.environ.get('HRDPS_NETWORK_TESTS'), reason='needs GLO-30 network access')
 def test_generate_small_run(fake_workdir):
     wd, aois = fake_workdir
     rc = generate.main(['--workdir', str(wd), '--aois', *[a.name for a in aois], '--n-train', '4', '--n-val', '1',

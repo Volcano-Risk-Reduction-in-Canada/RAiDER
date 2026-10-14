@@ -1,0 +1,69 @@
+# hrdps_synthetic settings
+# ========================
+# Every key is a command-line option of the command that reads it, with dashes or
+# underscores (chip-size == chip_size). Values shown are the built-in defaults.
+#
+# Precedence: built-in defaults < this file < options typed on the command line.
+#   - Top-level keys apply to every command that has that option.
+#   - The download / generate / tile sections apply to that command only and
+#     take precedence over top-level keys.
+#   - null (or leaving a key out) keeps the built-in default.
+#
+#   python -m hrdps_synthetic.download --config my.yaml
+#   python -m hrdps_synthetic.generate --config my.yaml --limit 5 --quicklook 5   # command line still wins
+#   python -m hrdps_synthetic.generate --config my.yaml --print-config            # show resolved settings
+#   python -m hrdps_synthetic.config --check my.yaml                              # validate for all commands
+#
+# Real runs save their resolved settings to <workdir>/settings_<command>.yaml.
+
+# --- shared --------------------------------------------------------------------
+workdir: /data/hrdps_synth  # required by download, generate and tile
+aoi_file: null              # null = the shipped volcano_aois.geojson; or a VRRC API dump
+aois: null                  # null = all 45 AOIs; or a list of AOI names
+seed: 0                     # sample plan and train/val split (generate), KMZ split preview (aois)
+
+# Scene footprint. download uses it to size the weather crops, so set it to the
+# largest scene you will render; generate uses it as the scene size.
+width_km: 20.0              # east-west
+length_km: 30.0             # north-south
+
+# --- python -m hrdps_synthetic.download -------------------------------------------
+download:
+  days: null                # null = every day on the Datamart; or e.g. ['20261001', '20261005:20261010']
+  asc_time: '02:02'         # mean ascending acquisition time, HH:MM UTC
+  desc_time: '14:43'        # mean descending acquisition time, HH:MM UTC
+  directions: [asc, desc]
+  workers: 4                # processes for GRIB decoding and RAiDER processing
+  threads: 8                # parallel GRIB downloads
+  grib_dir: null            # null = <workdir>/grib
+  grib_only: false          # only mirror the GRIBs, no processing
+  keep_grib: false
+  keep_hourly: false
+
+# --- python -m hrdps_synthetic.generate -------------------------------------------
+generate:
+  n_train: 8500             # training scenes
+  n_val: 1500               # validation scenes
+  inc_range: [20.0, 55.0]   # scene-centre incidence range (deg)
+  heading_asc: 348.0
+  heading_desc: 192.0
+  width_px: null            # scene size in pixels; overrides width_km
+  height_px: null           # overrides length_km
+  spacing: 10.0             # pixel spacing (m)
+  chip_size: null           # e.g. [500] (square) or [500, 500]; also cut every scene into chips
+  chip_stride: null         # null = chip size (no overlap)
+  chip_edge: drop           # drop | shift: what to do with a remainder narrower than a chip
+  no_scenes: false          # true = write only the chips
+  wavelength: 0.055466      # radar wavelength (m), RCM C-band
+  altitude_km: 600.0        # satellite altitude for the incidence ramp
+  slant: projected          # ZTD / cos(incidence)
+  workers: null             # null = CPU count - 1
+  quicklook: 0              # PNG previews of the first N finished scenes
+
+# --- python -m hrdps_synthetic.tile (chips from scenes already rendered) ----------
+tile:
+  chip_size: [500]          # required by tile; 500 x 500 px for Detectron2
+  chip_stride: null
+  chip_edge: drop
+  split: null               # null = both; or train | val
+  workers: null             # null = CPU count - 1

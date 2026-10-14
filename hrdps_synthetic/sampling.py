@@ -24,7 +24,7 @@ from typing import Optional, Sequence
 
 import numpy as np
 
-from hrdps_synthetic.aois import AOI, overlap_groups
+from hrdps_synthetic.aois import AOI, SCENE_LENGTH_M, SCENE_WIDTH_M, overlap_groups
 
 DIRECTIONS = ('asc', 'desc')
 SPLITS = ('train', 'val')
@@ -72,8 +72,9 @@ def choose_val_dates(dates: Sequence[dt.date], n_val: int, seed: int) -> set:
     return {dates[i] for i in idx}
 
 
-def assign_aoi_splits(aois: Sequence[AOI], design: SplitDesign, seed: int,
-                      n_train: int, n_val: int, n_directions: int = 2) -> dict[str, str]:
+def assign_aoi_splits(aois: Sequence[AOI], design: SplitDesign, seed: int, n_train: int, n_val: int,
+                      n_directions: int = 2, width: float = SCENE_WIDTH_M,
+                      length: float = SCENE_LENGTH_M) -> dict[str, str]:
     """Assign AOIs to train/val: overlap groups kept together, stratified by region."""
     need = design.train_aois + design.val_aois
     if len(aois) < need:
@@ -91,7 +92,7 @@ def assign_aoi_splits(aois: Sequence[AOI], design: SplitDesign, seed: int,
             n_tr_aois += 1
 
     region = {a.name: a.region for a in aois}
-    units = overlap_groups(aois)
+    units = overlap_groups(aois, width, length)
     rng = np.random.default_rng([seed, 2])
     by_region: dict[str, list[list[str]]] = {}
     for u in units:
@@ -194,12 +195,13 @@ def usable_dates(epoch_index: dict, aois: Sequence[AOI]) -> dict[str, list]:
     return out
 
 
-def summarise(aois: Sequence[AOI], epoch_index: dict, n_train: int, n_val: int, seed: int) -> PlanSummary:
+def summarise(aois: Sequence[AOI], epoch_index: dict, n_train: int, n_val: int, seed: int,
+              width: float = SCENE_WIDTH_M, length: float = SCENE_LENGTH_M) -> PlanSummary:
     usable = usable_dates(epoch_index, aois)
     common = sorted(set(usable['asc']) & set(usable['desc']))
     design = min_aoi_design(len(common), n_train, n_val)
     val_dates = choose_val_dates(common, design.val_dates, seed)
-    splits = assign_aoi_splits(aois, design, seed, n_train, n_val)
+    splits = assign_aoi_splits(aois, design, seed, n_train, n_val, width=width, length=length)
     pools = {'train': 0, 'val': 0}
     for a in aois:
         s = splits[a.name]
@@ -207,13 +209,14 @@ def summarise(aois: Sequence[AOI], epoch_index: dict, n_train: int, n_val: int, 
             n = sum(1 for x in usable[d] if (x in val_dates) == (s == 'val'))
             pools[s] += math.comb(n, 2)
     return PlanSummary(design, usable, sorted(val_dates), splits, pools, {'train': n_train, 'val': n_val},
-                       [g for g in overlap_groups(aois) if len(g) > 1])
+                       [g for g in overlap_groups(aois, width, length) if len(g) > 1])
 
 
 def build_plan(aois: Sequence[AOI], epoch_index: dict, n_train: int, n_val: int, seed: int,
-               inc_range: tuple[float, float], headings: dict[str, float]) -> tuple[list[PlanRow], PlanSummary]:
-    """Deterministic plan. `epoch_index[(aoi, direction)] = {date: relative_path}`."""
-    summary = summarise(aois, epoch_index, n_train, n_val, seed)
+               inc_range: tuple[float, float], headings: dict[str, float], width: float = SCENE_WIDTH_M,
+               length: float = SCENE_LENGTH_M) -> tuple[list[PlanRow], PlanSummary]:
+    """Deterministic plan for scenes of `width` x `length` m. `epoch_index[(aoi, direction)] = {date: path}`."""
+    summary = summarise(aois, epoch_index, n_train, n_val, seed, width, length)
     val_dates = set(summary.val_dates)
     rng = np.random.default_rng([seed, 3])
     rows: list[PlanRow] = []
@@ -229,6 +232,7 @@ def build_plan(aois: Sequence[AOI], epoch_index: dict, n_train: int, n_val: int,
         for (a, d, pairs), q in zip(cells, quotas):
             if q == 0:
                 continue
+            dxr, dyr = a.offset_ranges(width, length)
             for k in sorted(rng.choice(len(pairs), size=q, replace=False)):
                 ref, sec = pairs[k]
                 rows.append(PlanRow(
@@ -237,8 +241,8 @@ def build_plan(aois: Sequence[AOI], epoch_index: dict, n_train: int, n_val: int,
                     ref_date=ref.isoformat(), sec_date=sec.isoformat(),
                     ref_epoch=str(epoch_index[(a.name, d)][ref]), sec_epoch=str(epoch_index[(a.name, d)][sec]),
                     theta_c_deg=round(float(rng.uniform(*inc_range)), 4),
-                    offset_x_m=round(float(rng.uniform(*a.dx_range)), 1),
-                    offset_y_m=round(float(rng.uniform(*a.dy_range)), 1),
+                    offset_x_m=round(float(rng.uniform(*dxr)), 1),
+                    offset_y_m=round(float(rng.uniform(*dyr)), 1),
                 ))
     ids = [r.sample_id for r in rows]
     assert len(ids) == len(set(ids)), 'duplicate (AOI, direction, date pair) in plan'

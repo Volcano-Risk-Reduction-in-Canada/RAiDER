@@ -440,7 +440,7 @@ def index_epochs(workdir: Path) -> dict[tuple[str, str], dict[dt.date, Path]]:
     return out
 
 
-def epoch_nbytes(aoi, n_z: int = FIXED_Z.size) -> int:
-    """Uncompressed size of one epoch file (two float32 cubes)."""
-    lats, lons = regular_axes(aoi.raw_bounds())
+def epoch_nbytes(aoi, n_z: int = FIXED_Z.size, **size) -> int:
+    """Uncompressed size of one epoch file (two float32 cubes); `size` = width/length in m."""
+    lats, lons = regular_axes(aoi.raw_bounds(**size))
     return 2 * 4 * n_z * lats.size * lons.size

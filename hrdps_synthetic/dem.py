@@ -33,8 +33,8 @@ os.environ.setdefault('GDAL_DISABLE_READDIR_ON_OPEN', 'EMPTY_DIR')
 os.environ.setdefault('CPL_VSIL_CURL_ALLOWED_EXTENSIONS', '.tif,.TIF,.tiff,.vrt')
 
 
-def dem_path(workdir: Path, aoi: AOI) -> Path:
-    return Path(workdir) / 'dem' / f'{aoi.name}_glo30_utm10m.tif'
+def dem_path(workdir: Path, aoi: AOI, spacing: float = 10.0) -> Path:
+    return Path(workdir) / 'dem' / f'{aoi.name}_glo30_utm{spacing:g}m.tif'
 
 
 def dem_extent(aoi: AOI, width_m: float, length_m: float, spacing: float, margin_m: float = 200.0) -> tuple:
@@ -72,12 +72,22 @@ def fetch_glo30_utm(aoi: AOI, extent: tuple, spacing: float) -> tuple[np.ndarray
     return dst, transform
 
 
+def dem_covers(path: Path, extent: tuple, epsg: int, spacing: float) -> bool:
+    with rasterio.open(path) as ds:
+        b = ds.bounds
+        return (ds.crs.to_epsg() == epsg and abs(ds.res[0] - spacing) < 1e-6 and b.left <= extent[0] + 1e-6
+                and b.bottom <= extent[1] + 1e-6 and b.right >= extent[2] - 1e-6 and b.top >= extent[3] - 1e-6)
+
+
 def ensure_aoi_dem(aoi: AOI, workdir: Path, width_m: float = 20_000.0, length_m: float = 30_000.0,
                    spacing: float = 10.0) -> Path:
-    path = dem_path(workdir, aoi)
-    if path.exists():
-        return path
+    """Build (or reuse) the AOI DEM; rebuild it if it is too small for this scene size."""
+    path = dem_path(workdir, aoi, spacing)
     extent = dem_extent(aoi, width_m, length_m, spacing)
+    if path.exists():
+        if dem_covers(path, extent, aoi.epsg, spacing):
+            return path
+        log.info('DEM for %s is too small for %.0f x %.0f km scenes; rebuilding', aoi.name, width_m / 1e3, length_m / 1e3)
     t0 = time.time()
     arr, transform = fetch_glo30_utm(aoi, extent, spacing)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -125,8 +135,8 @@ def estimate_dem_bytes(aoi: AOI, width_m: float, length_m: float, spacing: float
     return int(4 * n_src), int(4 * n_dst)
 
 
-def maybe_dem(workdir: Optional[Path], aoi: AOI) -> Optional[Path]:
+def maybe_dem(workdir: Optional[Path], aoi: AOI, spacing: float = 10.0) -> Optional[Path]:
     if workdir is None:
         return None
-    p = dem_path(workdir, aoi)
+    p = dem_path(workdir, aoi, spacing)
     return p if p.exists() else None

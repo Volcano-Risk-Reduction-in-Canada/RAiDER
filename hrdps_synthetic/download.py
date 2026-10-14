@@ -108,7 +108,7 @@ def _map(pool, fn, items):
 
 
 def run_task(workdir: Path, task, grib_dir: Path, pool, threads: int, keep_grib: bool,
-             keep_hourly: bool, grib_only: bool) -> int:
+             keep_hourly: bool, grib_only: bool, size: dict) -> int:
     day, direction, target, aois = task
     hours = ha.bracketing_hours(target)
     hour_files: dict[str, list] = {a.name: [] for a in aois}
@@ -122,7 +122,7 @@ def run_task(workdir: Path, task, grib_dir: Path, pool, threads: int, keep_grib:
             if grib_only:
                 continue
             grid, _, _ = ha.read_grib(gribs[0][2])
-            targets = {a.name: ha.make_target_grid(a.raw_bounds(), grid) for a in need}
+            targets = {a.name: ha.make_target_grid(a.raw_bounds(**size), grid) for a in need}
             t0 = time.time()
             ha.build_raw_hour(valid, gribs, targets, {a.name: raws[a.name] for a in need}, executor=pool)
             log.info('%s %s: regridded %s for %d AOIs (%.0f s)', day, direction, f'{valid:%H}Z', len(need), time.time() - t0)
@@ -134,7 +134,7 @@ def run_task(workdir: Path, task, grib_dir: Path, pool, threads: int, keep_grib:
                 except OSError:
                     pass
         t0 = time.time()
-        jobs = [(str(wm_dir(workdir, a)), valid, a.weather_bounds()) for a in aois]
+        jobs = [(str(wm_dir(workdir, a)), valid, a.weather_bounds(**size)) for a in aois]
         processed = _map(pool, _process_hour_job, jobs)
         for a, p in zip(aois, processed):
             hour_files[a.name].append((valid, weight, p))
@@ -155,7 +155,7 @@ def run_task(workdir: Path, task, grib_dir: Path, pool, threads: int, keep_grib:
     return len(done)
 
 
-def dry_run(workdir: Path, tasks, aois: Sequence[AOI]) -> None:
+def dry_run(workdir: Path, tasks, aois: Sequence[AOI], size: dict) -> None:
     session = requests.Session()
     total_bytes, n_files, n_missing, peak = 0, 0, 0, 0
     hours_seen = {}
@@ -182,8 +182,8 @@ def dry_run(workdir: Path, tasks, aois: Sequence[AOI]) -> None:
         print(f'{day.isoformat():10s} {direction:4s} {target:%H:%M} {len(missing):5d} {"+".join(labels):>12s} '
               f'{task_bytes / 1e6:8.0f} {task_missing:12d}')
     n_epochs = sum(len(t[3]) for t in tasks)
-    epoch_bytes = sum(ha.epoch_nbytes(a) for t in tasks for a in t[3])
-    raw_peak = sum(ha.epoch_nbytes(a) for a in aois) * 4  # raw + processed hourly files per hour, rough
+    epoch_bytes = sum(ha.epoch_nbytes(a, **size) for t in tasks for a in t[3])
+    raw_peak = sum(ha.epoch_nbytes(a, **size) for a in aois) * 4  # raw + processed hourly files per hour, rough
     print()
     print(f'Tasks (day x direction): {len(tasks)}; epoch files to write: {n_epochs}')
     print(f'GRIB downloads: {n_files} files, ~{total_bytes / 1e9:.1f} GB (sizes from Datamart listings, rounded)')
@@ -195,7 +195,7 @@ def dry_run(workdir: Path, tasks, aois: Sequence[AOI]) -> None:
     print('Dry run: nothing was downloaded or written.')
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog='python -m hrdps_synthetic.download', description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--workdir', type=Path, required=True)
@@ -206,15 +206,28 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p.add_argument('--asc-time', default=DEFAULT_TIMES['asc'], help='ascending target time, HH:MM UTC')
     p.add_argument('--desc-time', default=DEFAULT_TIMES['desc'], help='descending target time, HH:MM UTC')
     p.add_argument('--directions', nargs='+', choices=('asc', 'desc'), default=['asc', 'desc'])
+    p.add_argument('--width-km', type=float, default=20.0,
+                   help='largest scene width (E-W) you will render; sizes the weather crops (default 20)')
+    p.add_argument('--length-km', type=float, default=30.0,
+                   help='largest scene length (N-S) you will render; sizes the weather crops (default 30)')
     p.add_argument('--workers', type=int, default=4, help='processes for GRIB decoding and RAiDER processing')
     p.add_argument('--threads', type=int, default=8, help='parallel GRIB downloads')
     p.add_argument('--grib-dir', type=Path, default=None, help='GRIB cache (default <workdir>/grib)')
-    p.add_argument('--grib-only', action='store_true', help='only mirror the needed GRIBs; no processing')
-    p.add_argument('--keep-grib', action='store_true')
-    p.add_argument('--keep-hourly', action='store_true', help='keep regridded raw and processed hourly files')
+    p.add_argument('--grib-only', action=argparse.BooleanOptionalAction, default=False,
+                   help='only mirror the needed GRIBs; no processing')
+    p.add_argument('--keep-grib', action=argparse.BooleanOptionalAction, default=False,
+                   help='keep downloaded GRIBs')
+    p.add_argument('--keep-hourly', action=argparse.BooleanOptionalAction, default=False,
+                   help='keep regridded raw and processed hourly files')
     p.add_argument('--dry-run', action='store_true', help='report downloads and storage; write nothing')
     p.add_argument('-v', '--verbose', action='store_true')
-    args = p.parse_args(argv)
+    return p
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    from hrdps_synthetic.config import parse_args, save_effective
+
+    args = parse_args(build_parser(), argv, 'download')
     setup_logging(args.verbose)
 
     aois = select_aois(load_aois(args.aoi_file), args.aois)
@@ -230,11 +243,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     log.info('%d AOIs, %d days (%s to %s), %d day/direction tasks pending', len(aois), len(days),
              days[0] if days else '-', days[-1] if days else '-', len(tasks))
 
+    size = {'width': args.width_km * 1e3, 'length': args.length_km * 1e3}
     if args.dry_run:
-        dry_run(args.workdir, tasks, aois)
+        dry_run(args.workdir, tasks, aois, size)
         return 0
 
     args.workdir.mkdir(parents=True, exist_ok=True)
+    log.info('Settings saved to %s', save_effective(args, 'download', args.workdir, argv))
     grib_dir = args.grib_dir or args.workdir / 'grib'
     from RAiDER.models.customExceptions import NoWeatherModelData
 
@@ -244,7 +259,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         for task in tasks:
             try:
                 n_done += run_task(args.workdir, task, grib_dir, pool, args.threads, args.keep_grib,
-                                   args.keep_hourly, args.grib_only)
+                                   args.keep_hourly, args.grib_only, size)
             except NoWeatherModelData as e:
                 log.warning('%s %s skipped, data not on the Datamart yet: %s', task[0], task[1], e)
                 failed.append(task[:2])

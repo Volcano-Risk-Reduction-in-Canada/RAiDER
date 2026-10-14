@@ -88,17 +88,32 @@ def grid_azimuth_of_true_north(epsg: int, lon: float, lat: float) -> float:
     return math.degrees(math.atan2(x1 - x0, y1 - y0))
 
 
-def incidence_field(scene: SceneGrid, theta_c: float, heading_deg: float,
-                    R: float = R_EARTH_M, H: float = RCM_ALTITUDE_M) -> np.ndarray:
-    """Per-pixel incidence (deg, float32) given the scene-centre incidence and heading."""
+def incidence_at(scene: SceneGrid, theta_c: float, heading_deg: float, x, y,
+                 R: float = R_EARTH_M, H: float = RCM_ALTITUDE_M) -> np.ndarray:
+    """Incidence (deg) at UTM points (x, y), given the scene-centre incidence and heading."""
     cx, cy = scene.center
     lon_c, lat_c = to_lonlat(scene.epsg, cx, cy)
     az = math.radians(look_azimuth_deg(heading_deg) + grid_azimuth_of_true_north(scene.epsg, lon_c, lat_c))
-    x, y = scene.pixel_centers()
     # Signed cross-track distance, positive away from the satellite (farther range).
-    r = (x[None, :] - cx) * math.sin(az) + (y[:, None] - cy) * math.cos(az)
-    G = ground_range_from_incidence(theta_c, R, H) + r
-    return incidence_from_ground_range(G, R, H).astype(np.float32)
+    r = (np.asarray(x) - cx) * math.sin(az) + (np.asarray(y) - cy) * math.cos(az)
+    return incidence_from_ground_range(ground_range_from_incidence(theta_c, R, H) + r, R, H)
+
+
+def incidence_field(scene: SceneGrid, theta_c: float, heading_deg: float,
+                    R: float = R_EARTH_M, H: float = RCM_ALTITUDE_M) -> np.ndarray:
+    """Per-pixel incidence (deg, float32) given the scene-centre incidence and heading."""
+    x, y = scene.pixel_centers()
+    return incidence_at(scene, theta_c, heading_deg, x[None, :], y[:, None], R, H).astype(np.float32)
+
+
+def los_ground_to_satellite(theta_deg: float, heading_deg: float) -> tuple[float, float, float]:
+    """Unit vector (east, north, up) from the ground pixel toward a right-looking satellite.
+
+    Heading is clockwise from true north; the look azimuth is heading + 90.
+    A LOS displacement d_los = d . los is positive toward the satellite.
+    """
+    th, az = math.radians(theta_deg), math.radians(look_azimuth_deg(heading_deg))
+    return (-math.sin(th) * math.sin(az), -math.sin(th) * math.cos(az), math.cos(th))
 
 
 def coarse_lonlat(scene: SceneGrid, step_px: int = 10) -> tuple[np.ndarray, np.ndarray, tuple[np.ndarray, np.ndarray]]:

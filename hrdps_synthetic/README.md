@@ -6,8 +6,10 @@ data. It is a standalone addition. It imports RAiDER from the installed
 environment and does not modify any RAiDER file.
 
 Each sample is a north-up 20 km (E–W) × 30 km (N–S) raster at 10 m spacing
-(2000 × 3000 pixels) in the AOI's UTM zone. It holds the differential slant
-tropospheric delay between two dates, expressed as RCM C-band phase.
+(2000 × 3000 pixels) in the AOI's UTM zone by default. It holds the differential
+slant tropospheric delay between two dates, expressed as RCM C-band phase.
+The scene size is adjustable, and scenes can also be cut into fixed-size chips
+such as 500 × 500 pixels for Detectron2. See [Scene size and chips](#scene-size-and-chips).
 
 ## Requirements
 
@@ -33,6 +35,10 @@ python -m hrdps_synthetic.download --workdir /data/hrdps_synth --workers 8
 python -m hrdps_synthetic.generate --workdir /data/hrdps_synth --dry-run
 python -m hrdps_synthetic.generate --workdir /data/hrdps_synth --limit 5 --quicklook 5   # look first
 python -m hrdps_synthetic.generate --workdir /data/hrdps_synth --workers 16
+
+# 3. Optional: chips from scenes that already exist
+python -m hrdps_synthetic.tile --workdir /data/hrdps_synth --chip-size 500 --dry-run
+python -m hrdps_synthetic.tile --workdir /data/hrdps_synth --chip-size 500 --workers 8
 ```
 
 The MSC Datamart keeps only the **latest ~30 days**. One download run collects
@@ -41,6 +47,51 @@ rerun the download within 30 days, then rerun `generate --replan`.
 
 Every top-level command has `--dry-run`, which reports downloads, disk use and
 run time and writes nothing.
+
+## Settings file
+
+Every option can also be set in a YAML file passed with `--config`. All defaults
+and command-line options stay as they are. Precedence, lowest to highest:
+**built-in defaults < settings file < command line.**
+
+```bash
+python -m hrdps_synthetic.config --example > my_settings.yaml   # annotated template with all defaults
+python -m hrdps_synthetic.config --check my_settings.yaml        # validate for every command
+python -m hrdps_synthetic.download --config my_settings.yaml
+python -m hrdps_synthetic.generate --config my_settings.yaml --limit 5 --quicklook 5   # command line still wins
+python -m hrdps_synthetic.generate --config my_settings.yaml --print-config           # show resolved settings
+```
+
+```yaml
+workdir: /data/hrdps_synth   # shared by download, generate and tile
+width_km: 20.0               # sizes download's weather crops and generate's scenes
+chip_size: [500]             # top level: generate makes chips, and tile uses the same size
+generate:
+  n_train: 8500
+  n_val: 1500
+  no_scenes: true            # chips only
+download:
+  workers: 8
+```
+
+How the file is read:
+
+- **Keys.** Every key is a command-line option name; dashes and underscores both work.
+- **Top level and sections.** Top-level keys apply to every command that has
+  that option. The `download:`, `generate:` and `tile:` sections apply to one
+  command only and take precedence over top-level keys.
+- **null.** `null`, or leaving a key out, keeps the built-in default.
+- **Validation.** Unknown keys, wrong types, invalid choices and wrong value
+  counts are rejected with the key named.
+- **Times.** `14:43` reads as a time, not the YAML 1.1 base-60 integer, quoted or not.
+- **Switching flags back off.** A flag switched on in the file can be switched
+  off on the command line: `--no-keep-grib`, `--no-keep-hourly`,
+  `--no-grib-only`, and `--scenes` to undo `no_scenes: true`.
+- **Saved settings.** Each real run writes its resolved settings, with the
+  command line and config path, to `<workdir>/settings_<command>.yaml`.
+
+The template is `config.example.yaml` in this folder. A test checks that its
+values stay equal to the built-in defaults.
 
 ## What the pipeline does
 
@@ -95,14 +146,73 @@ about 150 MB of GRIBs.
   wrapped = mod(unwrapped + π, 2π) − π. The sign convention matches
   `convert_delays_to_phase_change.sh` (reference − secondary).
 
+## Scene size and chips
+
+**Scene size.** Set it in kilometres or in pixels; pixels win when both are given.
+
+```bash
+python -m hrdps_synthetic.generate --workdir W --width-km 20 --length-km 30      # default, 2000 x 3000 px
+python -m hrdps_synthetic.generate --workdir W --width-px 500 --height-px 500   # 5 x 5 km scenes
+python -m hrdps_synthetic.generate --workdir W --width-px 1000 --height-px 1000 --spacing 20
+```
+
+- Scene size is part of the plan. Changing it needs `--replan`, because volcano
+  shift ranges and overlap groups depend on it.
+- A scene can only be as large as the weather crops the download made. The
+  download's `--width-km`/`--length-km` (default 20 × 30) set those crops, so
+  pass the largest size you plan to render there. If a requested scene does not
+  fit, `generate` stops and names the AOIs. Smaller scenes always fit.
+- An AOI's DEM is rebuilt automatically if it is too small for a larger scene size.
+
+**Chips during generation.** `--chip-size W [H]` cuts every scene into chips as
+it is rendered.
+
+```bash
+python -m hrdps_synthetic.generate --workdir W --chip-size 500                  # scenes + 24 chips per scene
+python -m hrdps_synthetic.generate --workdir W --chip-size 500 --no-scenes      # chips only
+python -m hrdps_synthetic.generate --workdir W --chip-size 512 --chip-stride 256 --chip-edge shift
+```
+
+**Chips from existing scenes.** `python -m hrdps_synthetic.tile` takes the same
+chip options and works from `manifest.csv`, so you can try other chip sizes
+without re-rendering. It produces exactly the chips `generate --chip-size`
+would; a test checks this.
+
+How chips work:
+
+- **Stride.** The default stride equals the chip size, so chips do not overlap.
+  A 2000 × 3000 scene gives 4 × 6 = 24 chips of 500 × 500.
+- **Edges.** With `--chip-edge drop` (default), a strip narrower than a chip is
+  left out. With `shift`, one more chip is placed flush with the edge and
+  overlaps its neighbour.
+- **Splits.** Every chip inherits its scene's train/validation split, so no
+  atmosphere crosses splits. Chips of one scene share a date pair but cover
+  different ground.
+- **Metadata.** Each chip is a georeferenced float32 GeoTIFF (unwrapped and
+  wrapped phase). It records its own incidence at the centre and the range
+  across the chip, and its LOS vector at the centre, both in `chips.csv` and in
+  the GeoTIFF tags.
+- **Folders.** Each chip configuration gets its own folder (`chips_500x500`,
+  `chips_512x512_s256x256_shift`, ...), so several can coexist.
+- **One output setting per run.** A workdir refuses to switch `--chip-size` or
+  `--no-scenes` partway through a plan. Use `tile` for other chip sizes.
+- **Storage.** Chips take about as much space as the scenes they come from, so
+  scenes plus chips roughly doubles disk use. `--dry-run` measures it.
+- **Detectron2.** Its default loader reads 8-bit images, while these chips are
+  float32 radians, so they can be summed with your magmatic chips first. Read
+  them with a custom dataset mapper (rasterio), or convert them after combining.
+
 ### Outputs
 
 ```
 <workdir>/plan.csv, plan_meta.json         deterministic plan (seeded)
+<workdir>/settings_<command>.yaml          resolved settings of the last run of each command
 <workdir>/samples/<split>/<AOI>/<id>_unw.tif   float32 radians, DEFLATE, 512 tiles
 <workdir>/samples/<split>/<AOI>/<id>_wrp.tif
 <workdir>/manifest.csv                     one row per finished sample
-<workdir>/dem/<AOI>_glo30_utm10m.tif       per-AOI 10 m DEM covering every scene position
+<workdir>/chips_<W>x<H>[...]/chips.csv     one row per chip (with --chip-size or tile)
+<workdir>/chips_<W>x<H>[...]/<split>/<AOI>/<id>_rRR_cCC_unw.tif, ..._wrp.tif
+<workdir>/dem/<AOI>_glo30_utm<spacing>m.tif per-AOI DEM covering every scene position
 <workdir>/quicklook/<id>.png               with --quicklook N
 ```
 
@@ -175,6 +285,10 @@ The tests cover:
 - the rotated-grid transform against pyproj and against cfgrib's coordinates for
   the full grid (agreement within 1e-5°);
 - regridding of an analytic field;
+- chip windows and edge modes, chip incidence and georeferencing, and chips from
+  `generate --chip-size` matching chips from `tile`;
+- settings files: precedence, sections, validation, unquoted times, flag
+  negation, the example matching the defaults, and saved run settings;
 - interpolation against `RAiDER.delayFcns.getInterpolators`, and the projection
   and phase wrapping;
 - the incidence ramp and LOS signs;
