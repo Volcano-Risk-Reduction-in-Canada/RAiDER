@@ -161,6 +161,25 @@ def render_file(args) -> dict:
         return {'wrp': wrp_rel, 'error': f'{type(e).__name__}: {e}'}
 
 
+def _probe(args) -> tuple[int, bool, float]:
+    """Render one RGB in memory: (compressed bytes, flipped, seconds). Runs in a worker process so the
+    main process never holds GDAL state at exit (which made GDAL print noise during interpreter shutdown)."""
+    root, wrp_rel, mode = args
+    import rasterio
+    from rasterio.io import MemoryFile
+
+    with rasterio.open(Path(root) / wrp_rel) as ds:
+        wrp, tags, crs, tr = ds.read(1), ds.tags(), ds.crs, ds.transform
+    flip = needs_flip(tags, mode)
+    t0 = time.time()
+    img = phase_to_rgb(-wrp if flip else wrp)
+    with MemoryFile() as mf:
+        with mf.open(**rgb_profile(img.shape[2], img.shape[1], crs, tr, wrp.shape[0] >= 512)) as dst:
+            dst.write(img)
+        nb = len(mf.read())
+    return nb, flip, time.time() - t0
+
+
 def _manifests(root: Path, scenes: bool, chips: bool) -> list[Path]:
     out = []
     if scenes and (root / 'manifest.csv').exists():
@@ -217,19 +236,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     if args.dry_run:
         if jobs:
-            from rasterio.io import MemoryFile
-            import rasterio
-
-            with rasterio.open(root / jobs[0]) as ds:
-                wrp, tags, crs, tr = ds.read(1), ds.tags(), ds.crs, ds.transform
-            flip = needs_flip(tags, args.sign)
-            t0 = time.time()
-            rgb = phase_to_rgb(-wrp if flip else wrp)
-            with MemoryFile() as mf:
-                with mf.open(**rgb_profile(rgb.shape[2], rgb.shape[1], crs, tr, wrp.shape[0] >= 512)) as dst:
-                    dst.write(rgb)
-                nb = len(mf.read())
-            print(f'Probe {jobs[0]}: {nb / 1e6:.2f} MB, {time.time() - t0:.1f} s'
+            with mp.get_context('spawn').Pool(1) as pool:
+                nb, flip, secs = pool.apply(_probe, ((str(root), jobs[0], args.sign),))
+            print(f'Probe {jobs[0]}: {nb / 1e6:.2f} MB, {secs:.1f} s'
                   f'{" (legacy sign, flipped)" if flip else ""}')
             print(f'Estimated: ~{nb * len(jobs) / 1e9:.1f} GB for {len(jobs)} files (sizes differ for chips and scenes)')
         print('Dry run: nothing was written.')
