@@ -5,11 +5,19 @@ phase**, for training a deformation detector alongside synthetic magmatic-source
 data. It is a standalone addition. It imports RAiDER from the installed
 environment and does not modify any RAiDER file.
 
-Each sample is a north-up 20 km (E–W) × 30 km (N–S) raster at 10 m spacing
-(2000 × 3000 pixels) in the AOI's UTM zone by default. It holds the differential
-slant tropospheric delay between two dates, expressed as RCM C-band phase.
-The scene size is adjustable, and scenes can also be cut into fixed-size chips
-such as 500 × 500 pixels for Detectron2. See [Scene size and chips](#scene-size-and-chips).
+Each sample holds the differential slant tropospheric delay between two dates,
+expressed as RCM C-band phase.
+
+- **Layout.** By default each sample is in **radar geometry**, the same array
+  layout as the synthetic magmatic interferograms: 3000 rows along-track by
+  2000 columns across-track at 10 m. The two can therefore be summed pixel for
+  pixel. North-up UTM rasters are still available.
+- **Products.** Each sample has unwrapped phase, wrapped phase, and a
+  **false-colour RGB** of the wrapped phase, which is now a standard output.
+- **Size and chips.** The scene size is adjustable, and scenes can be cut into
+  fixed-size chips such as 500 × 500 pixels for Detectron2.
+
+See [Conventions](#conventions) and [Scene size and chips](#scene-size-and-chips).
 
 ## Requirements
 
@@ -39,6 +47,19 @@ python -m hrdps_synthetic.generate --workdir /data/hrdps_synth --workers 16
 # 3. Optional: chips from scenes that already exist
 python -m hrdps_synthetic.tile --workdir /data/hrdps_synth --chip-size 500 --dry-run
 python -m hrdps_synthetic.tile --workdir /data/hrdps_synth --chip-size 500 --workers 8
+
+# 4. Optional: RGB for wrapped phase written before RGB was standard (scenes and chips)
+python -m hrdps_synthetic.rgb --workdir /data/hrdps_synth --dry-run
+python -m hrdps_synthetic.rgb --workdir /data/hrdps_synth --workers 8
+```
+
+Epochs (`epochs/`) and DEMs (`dem/`) always live in the workdir. `--output-dir`
+(generate, tile, rgb) puts the plan, manifests, samples and chips in a separate
+folder. That way one download can serve several renderings, for example the
+older north-up run and a new radar-geometry run:
+
+```bash
+python -m hrdps_synthetic.generate --workdir /data/hrdps_synth --output-dir /data/hrdps_synth/radar
 ```
 
 The MSC Datamart keeps only the **latest ~30 days**. One download run collects
@@ -93,6 +114,49 @@ How the file is read:
 The template is `config.example.yaml` in this folder. A test checks that its
 values stay equal to the built-in defaults.
 
+## Conventions
+
+These are chosen on their own merits. The magmatic repository is used only as a
+reference for the colour ramp and the file layout.
+
+| Item | Convention |
+|---|---|
+| Phase | `phase = 4π/λ × (STD_sec − STD_ref)`. Positive = more delay, i.e. longer range, on the later date, the same sign as subsidence. **No change = 0 rad.** No referencing. |
+| Wrapped phase | The unwrapped phase reduced to [−π, π): `mod(phase + π, 2π) − π`, so 0 stays 0. |
+| Wavelength | 0.055466 m, from c / 5.405 GHz (RCM). |
+| RGB | The 9-stop cyclic ramp of `applyEVPhaseColorRamp.m`, position = (wrapped + π) / 2π. **0 rad = red (255, 0, 0)** at the ramp midpoint, ±π = teal (0, 191, 169). 3-band uint8 GeoTIFF, bands named red/green/blue. |
+| Radar layout | Rows along-track in flight order (row 0 = start of the swath), columns across-track from near range (column 0, satellite side) to far range: the usual SLC orientation. Ascending scenes look flipped north–south and descending scenes mirrored east–west, compared with a map. |
+| Radar georeferencing | No CRS. The transform is the magmatic files' local metric frame: origin at the swath centre, x = −W/2 at column 0, y = +L/2 at row 0. The real location is in `manifest.csv` (centre, corners, UTM EPSG, flight azimuth) and in the GeoTIFF tags. |
+| LOS vector | Unit vector from the ground to a right-looking satellite, in east-north-up; look azimuth = heading + 90°. It matches the magmatic `los_vector`. |
+| North-up layout | `--geometry north-up`: UTM rasters, 20 km E–W × 30 km N–S. |
+
+**Older outputs.** Runs from before 2026-10-15 used north-up layout and the
+opposite sign, `4π/λ × (STD_ref − STD_sec)`, recorded in each file's
+`convention` tag. `python -m hrdps_synthetic.rgb` renders their RGBs in the
+current sign (`--sign auto`) and leaves their float products as written. A
+radar-geometry version of an old run has to be re-rendered (about 3 s per
+scene, same seed and plan), because north-up scenes cannot be rotated without
+losing their corners. `generate` refuses to mix conventions in one output
+folder.
+
+**Issues noticed in the magmatic repository.** These are not copied here:
+
+- `projection/los.py: phase_to_radians` maps zero displacement to −π, and with
+  the opposite sign to the sweep. It feeds the public `compute_interferogram()`.
+  The sweep (`sweep/simulate.py: build_products`) and the Dash app are correct:
+  0 → 0 rad, positive = range increase.
+- `constants.py` sets `WAVELENGTH_RCM = 0.05405` m. That looks like the
+  5.405 GHz frequency written as centimetres; the true value is 0.055466 m. Its
+  comment and the MATLAB origin use a fringe of 0.028333 m (λ = 0.0567 m), so
+  three different wavelengths are in play. Magmatic fringes are therefore about
+  2.6 % too dense relative to this atmosphere.
+- Rows are evaluated from along-track −L/2 at row 0, but the GeoTIFF transform
+  puts row 0 at y = +L/2. The manifest's `along_track_km` therefore has the
+  opposite sign to the raster's y coordinate. Rasters and polygons agree with
+  each other.
+- Large sources (metres of LOS motion) alias at 10 m pixels. Real data would
+  decorrelate there.
+
 ## What the pipeline does
 
 ### 1. Download (`download.py`, `hrdps_archive.py`)
@@ -136,15 +200,16 @@ about 150 MB of GRIBs.
 - **Placement.** Volcano scenes are shifted at random while the AOI polygon
   stays inside. Meager's polygon is 24 km wide, so its east-west shift is
   limited to ±1 km. The 36 point AOIs shift up to ±5 km on each axis.
-- **Delay.** ΔZTD = (wet + hydro)_ref − (wet + hydro)_sec is interpolated
+- **Delay.** ΔZTD = (wet + hydro)_sec − (wet + hydro)_ref is interpolated
   trilinearly at each pixel's latitude, longitude and GLO-30 height (10 m UTM,
   bilinear from 30 m, WGS84 ellipsoidal as in RAiDER). Then
   ΔSTD = ΔZTD / cos(incidence), the projected mapping RAiDER's `Conventional`
   LOS uses. Ray tracing is not used until it has been validated.
 - **Phase.** unwrapped = 4π/λ × ΔSTD with λ = 0.055466 m (RCM, 5.405 GHz).
   There is **no referencing**; the absolute differential delay is kept.
-  wrapped = mod(unwrapped + π, 2π) − π. The sign convention matches
-  `convert_delays_to_phase_change.sh` (reference − secondary).
+  wrapped = mod(unwrapped + π, 2π) − π. See [Conventions](#conventions).
+- **RGB.** The wrapped phase on the cyclic ramp, written as `<id>_rgb.tif`
+  (`--no-rgb` to skip).
 
 ## Scene size and chips
 
@@ -205,23 +270,27 @@ How chips work:
 ### Outputs
 
 ```
-<workdir>/plan.csv, plan_meta.json         deterministic plan (seeded)
-<workdir>/settings_<command>.yaml          resolved settings of the last run of each command
-<workdir>/samples/<split>/<AOI>/<id>_unw.tif   float32 radians, DEFLATE, 512 tiles
-<workdir>/samples/<split>/<AOI>/<id>_wrp.tif
-<workdir>/manifest.csv                     one row per finished sample
-<workdir>/chips_<W>x<H>[...]/chips.csv     one row per chip (with --chip-size or tile)
-<workdir>/chips_<W>x<H>[...]/<split>/<AOI>/<id>_rRR_cCC_unw.tif, ..._wrp.tif
-<workdir>/dem/<AOI>_glo30_utm<spacing>m.tif per-AOI DEM covering every scene position
-<workdir>/quicklook/<id>.png               with --quicklook N
+<workdir>/epochs/, <workdir>/dem/<AOI>_glo30_utm<spacing>m.tif   shared inputs
+<out>/plan.csv, plan_meta.json, outputs_meta.json   deterministic plan (seeded) and output settings
+<out>/settings_<command>.yaml              resolved settings of the last run of each command
+<out>/samples/<split>/<AOI>/<id>_unw.tif   unwrapped phase, float32 radians
+<out>/samples/<split>/<AOI>/<id>_wrp.tif   wrapped phase, float32 radians in [-pi, pi)
+<out>/samples/<split>/<AOI>/<id>_rgb.tif   false-colour RGB, 3 x uint8
+<out>/manifest.csv                         one row per finished sample
+<out>/chips_<W>x<H>[...]/chips.csv         one row per chip (with --chip-size or tile)
+<out>/chips_<W>x<H>[...]/<split>/<AOI>/<id>_rRR_cCC_{unw,wrp,rgb}.tif
+<out>/quicklook/<id>.png                   with --quicklook N
 ```
+`<out>` is `--output-dir`, which defaults to the workdir.
 
 Sample ids are `<split>_<AOI>_<asc|desc>_<refdate>_<secdate>`. Besides the plan
 columns, the manifest records:
 
 - the look azimuth and the incidence range in the scene;
 - the **LOS unit vector (ground → satellite, ENU)** at the scene centre;
-- the scene centre (lat/lon and UTM), EPSG code, origin and size;
+- the layout, flight azimuth in the UTM grid, scene centre (lat/lon and UTM),
+  corner coordinates, EPSG code, origin and size;
+- the phase sign convention;
 - DEM range and ΔSTD statistics;
 - the output paths.
 

@@ -50,9 +50,10 @@ def _run_generate(wd, aois, *extra):
                           '--workers', '2', '--width-px', '200', '--height-px', '300', *extra])
 
 
-def test_generate_scenes_and_chips_then_tile_matches(fake_workdir):
+@pytest.mark.parametrize('geometry', ['radar', 'north-up'])
+def test_generate_scenes_and_chips_then_tile_matches(fake_workdir, geometry):
     wd, aois = fake_workdir
-    assert _run_generate(wd, aois, '--chip-size', '100') == 0
+    assert _run_generate(wd, aois, '--chip-size', '100', '--geometry', geometry) == 0
     with open(wd / 'manifest.csv') as f:
         scenes = list(csv.DictReader(f))
     assert len(scenes) == 5 and all(int(r['n_chips']) == 6 for r in scenes)
@@ -61,11 +62,21 @@ def test_generate_scenes_and_chips_then_tile_matches(fake_workdir):
         chips = {r['chip_id']: r for r in csv.DictReader(f)}
     assert len(chips) == 30
     for r in chips.values():  # chips inherit the scene split and georeferencing
-        with rasterio.open(wd / r['unw_path']) as u, rasterio.open(wd / r['wrp_path']) as w:
-            assert u.shape == (100, 100) and u.transform.c == float(r['x0']) and u.transform.f == float(r['y0'])
+        with rasterio.open(wd / r['unw_path']) as u, rasterio.open(wd / r['wrp_path']) as w, \
+                rasterio.open(wd / r['rgb_path']) as c:
+            assert u.shape == (100, 100) and c.count == 3 and c.dtypes[0] == 'uint8'
+            if geometry == 'north-up':
+                assert u.crs.to_epsg() == int(r['epsg'])
+                assert u.transform.c == float(r['x0']) and u.transform.f == float(r['y0'])
+            else:  # local metric frame of the magmatic files, no CRS
+                assert u.crs is None
+                assert u.transform.c == -1000 + 10 * int(r['col0']) and u.transform.f == 1500 - 10 * int(r['row0'])
             k = (u.read(1).astype(float) - w.read(1)) / (2 * np.pi)
             assert np.allclose(k, np.round(k), atol=1e-3)
-        assert r['chip_id'].startswith(r['split'])
+            from hrdps_synthetic.rgb import phase_to_rgb
+            assert np.array_equal(c.read(), phase_to_rgb(w.read(1)))
+        assert r['chip_id'].startswith(r['split']) and r['geometry'] == geometry and r['phase_sign'] == 'sec_minus_ref'
+
 
     # The tile command reproduces the same chips from the written scenes.
     first = {cid: rasterio.open(wd / r['unw_path']).read(1) for cid, r in chips.items()}

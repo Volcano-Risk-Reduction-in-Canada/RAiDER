@@ -24,7 +24,7 @@ from typing import Optional, Sequence
 
 import numpy as np
 
-from hrdps_synthetic.aois import AOI, SCENE_LENGTH_M, SCENE_WIDTH_M, overlap_groups
+from hrdps_synthetic.aois import AOI, RCM_HEADINGS, SCENE_LENGTH_M, SCENE_WIDTH_M, overlap_groups
 
 DIRECTIONS = ('asc', 'desc')
 SPLITS = ('train', 'val')
@@ -73,8 +73,8 @@ def choose_val_dates(dates: Sequence[dt.date], n_val: int, seed: int) -> set:
 
 
 def assign_aoi_splits(aois: Sequence[AOI], design: SplitDesign, seed: int, n_train: int, n_val: int,
-                      n_directions: int = 2, width: float = SCENE_WIDTH_M,
-                      length: float = SCENE_LENGTH_M) -> dict[str, str]:
+                      n_directions: int = 2, width: float = SCENE_WIDTH_M, length: float = SCENE_LENGTH_M,
+                      geometry: str = 'north-up', headings: Sequence[float] = RCM_HEADINGS) -> dict[str, str]:
     """Assign AOIs to train/val: overlap groups kept together, stratified by region."""
     need = design.train_aois + design.val_aois
     if len(aois) < need:
@@ -92,7 +92,7 @@ def assign_aoi_splits(aois: Sequence[AOI], design: SplitDesign, seed: int, n_tra
             n_tr_aois += 1
 
     region = {a.name: a.region for a in aois}
-    units = overlap_groups(aois, width, length)
+    units = overlap_groups(aois, width, length, geometry, headings)
     rng = np.random.default_rng([seed, 2])
     by_region: dict[str, list[list[str]]] = {}
     for u in units:
@@ -196,12 +196,14 @@ def usable_dates(epoch_index: dict, aois: Sequence[AOI]) -> dict[str, list]:
 
 
 def summarise(aois: Sequence[AOI], epoch_index: dict, n_train: int, n_val: int, seed: int,
-              width: float = SCENE_WIDTH_M, length: float = SCENE_LENGTH_M) -> PlanSummary:
+              width: float = SCENE_WIDTH_M, length: float = SCENE_LENGTH_M, geometry: str = 'north-up',
+              headings: Sequence[float] = RCM_HEADINGS) -> PlanSummary:
     usable = usable_dates(epoch_index, aois)
     common = sorted(set(usable['asc']) & set(usable['desc']))
     design = min_aoi_design(len(common), n_train, n_val)
     val_dates = choose_val_dates(common, design.val_dates, seed)
-    splits = assign_aoi_splits(aois, design, seed, n_train, n_val, width=width, length=length)
+    splits = assign_aoi_splits(aois, design, seed, n_train, n_val, width=width, length=length,
+                               geometry=geometry, headings=headings)
     pools = {'train': 0, 'val': 0}
     for a in aois:
         s = splits[a.name]
@@ -209,14 +211,19 @@ def summarise(aois: Sequence[AOI], epoch_index: dict, n_train: int, n_val: int, 
             n = sum(1 for x in usable[d] if (x in val_dates) == (s == 'val'))
             pools[s] += math.comb(n, 2)
     return PlanSummary(design, usable, sorted(val_dates), splits, pools, {'train': n_train, 'val': n_val},
-                       [g for g in overlap_groups(aois, width, length) if len(g) > 1])
+                       [g for g in overlap_groups(aois, width, length, geometry, headings) if len(g) > 1])
 
 
 def build_plan(aois: Sequence[AOI], epoch_index: dict, n_train: int, n_val: int, seed: int,
                inc_range: tuple[float, float], headings: dict[str, float], width: float = SCENE_WIDTH_M,
-               length: float = SCENE_LENGTH_M) -> tuple[list[PlanRow], PlanSummary]:
-    """Deterministic plan for scenes of `width` x `length` m. `epoch_index[(aoi, direction)] = {date: path}`."""
-    summary = summarise(aois, epoch_index, n_train, n_val, seed, width, length)
+               length: float = SCENE_LENGTH_M, geometry: str = 'north-up') -> tuple[list[PlanRow], PlanSummary]:
+    """Deterministic plan for scenes of `width` x `length` m. `epoch_index[(aoi, direction)] = {date: path}`.
+
+    Offsets are in the scene's own axes: east/north for north-up scenes,
+    across-track/along-track for radar scenes.
+    """
+    hd = (headings['asc'], headings['desc'])
+    summary = summarise(aois, epoch_index, n_train, n_val, seed, width, length, geometry, hd)
     val_dates = set(summary.val_dates)
     rng = np.random.default_rng([seed, 3])
     rows: list[PlanRow] = []
@@ -232,7 +239,7 @@ def build_plan(aois: Sequence[AOI], epoch_index: dict, n_train: int, n_val: int,
         for (a, d, pairs), q in zip(cells, quotas):
             if q == 0:
                 continue
-            dxr, dyr = a.offset_ranges(width, length)
+            dxr, dyr = a.offset_ranges(width, length, geometry, headings[d] if geometry == 'radar' else None)
             for k in sorted(rng.choice(len(pairs), size=q, replace=False)):
                 ref, sec = pairs[k]
                 rows.append(PlanRow(

@@ -136,6 +136,23 @@ def to_lonlat(epsg: int, x, y):
     return _transformer(epsg, 4326).transform(x, y)
 
 
+GEOMETRIES = ('radar', 'north-up')
+RCM_HEADINGS = (348.0, 192.0)  # ascending, descending (deg clockwise from true north)
+
+
+def grid_azimuth_of_true_north(epsg: int, lon: float, lat: float) -> float:
+    """Clockwise angle (deg) from UTM grid north to true north at (lon, lat)."""
+    x0, y0 = to_utm(epsg, lon, lat)
+    x1, y1 = to_utm(epsg, lon, lat + 0.01)
+    return math.degrees(math.atan2(x1 - x0, y1 - y0))
+
+
+def radar_basis(flight_az_grid_deg: float) -> tuple[tuple[float, float], tuple[float, float]]:
+    """Unit vectors (east, north) in the UTM grid: flight direction, and the right-looking look direction."""
+    phi = math.radians(flight_az_grid_deg)
+    return (math.sin(phi), math.cos(phi)), (math.cos(phi), -math.sin(phi))
+
+
 @dataclass
 class AOI:
     name: str
@@ -146,29 +163,70 @@ class AOI:
     epsg: int
     cx: float  # centroid, UTM metres
     cy: float
-    dx_range: tuple[float, float]  # allowed scene-centre offsets from the centroid (m), default scene size
+    dx_range: tuple[float, float]  # north-up E-W offsets of the scene centre (m), default scene size
     dy_range: tuple[float, float]
     polygon_lonlat: Optional[Polygon] = None
     poly_bounds_utm: Optional[tuple] = None  # (minx, miny, maxx, maxy) of the volcano polygon
+    poly_utm: Optional[Polygon] = None
 
-    def offset_ranges(self, width: float = SCENE_WIDTH_M, length: float = SCENE_LENGTH_M) -> tuple[tuple, tuple]:
-        """Allowed scene-centre offsets (dx_range, dy_range) for a scene of the given size."""
+    def flight_az_grid(self, heading_deg: float) -> float:
+        """Flight azimuth in the UTM grid frame (deg clockwise from grid north) at the AOI."""
+        return heading_deg + grid_azimuth_of_true_north(self.epsg, self.lon, self.lat)
+
+    def offset_ranges(self, width: float = SCENE_WIDTH_M, length: float = SCENE_LENGTH_M,
+                      geometry: str = 'north-up', heading: Optional[float] = None) -> tuple[tuple, tuple]:
+        """Allowed scene-centre offsets (x_range, y_range) in the scene's own axes.
+
+        north-up: x = east, y = north. radar: x = across-track (toward far range),
+        y = along-track (flight direction), for the given heading. Volcano polygons
+        stay inside the scene unless they are larger than it along an axis.
+        """
         if self.poly_bounds_utm is None:
             return (-POINT_OFFSET_M, POINT_OFFSET_M), (-POINT_OFFSET_M, POINT_OFFSET_M)
-        minx, miny, maxx, maxy = self.poly_bounds_utm
-        return _offset_range(minx, maxx, self.cx, width), _offset_range(miny, maxy, self.cy, length)
+        if geometry == 'north-up':
+            minx, miny, maxx, maxy = self.poly_bounds_utm
+            return _offset_range(minx, maxx, self.cx, width), _offset_range(miny, maxy, self.cy, length)
+        if heading is None:
+            raise ValueError('radar geometry needs a heading')
+        f, l = radar_basis(self.flight_az_grid(heading))
+        xy = np.asarray(self.poly_utm.exterior.coords) - (self.cx, self.cy)
+        g = xy @ np.array(l)  # across-track
+        a = xy @ np.array(f)  # along-track
+        return _offset_range(g.min(), g.max(), 0.0, width), _offset_range(a.min(), a.max(), 0.0, length)
 
     # -- footprints ---------------------------------------------------------
     def footprint_utm(self, dx: float = 0.0, dy: float = 0.0,
                       width: float = SCENE_WIDTH_M, length: float = SCENE_LENGTH_M) -> tuple:
+        """North-up footprint bounds (xmin, ymin, xmax, ymax) for an E/N offset."""
         x, y = self.cx + dx, self.cy + dy
         return (x - width / 2, y - length / 2, x + width / 2, y + length / 2)
 
-    def reach_utm(self, width: float = SCENE_WIDTH_M, length: float = SCENE_LENGTH_M) -> tuple:
-        """Rectangle covering every possible scene position for this AOI."""
-        dxr, dyr = self.offset_ranges(width, length)
-        return (self.cx + dxr[0] - width / 2, self.cy + dyr[0] - length / 2,
-                self.cx + dxr[1] + width / 2, self.cy + dyr[1] + length / 2)
+    def footprint_corners(self, dx: float = 0.0, dy: float = 0.0, width: float = SCENE_WIDTH_M,
+                          length: float = SCENE_LENGTH_M, geometry: str = 'north-up',
+                          heading: Optional[float] = None) -> np.ndarray:
+        """(4, 2) UTM corners of one scene; offsets are in the scene's own axes (see offset_ranges)."""
+        if geometry == 'north-up':
+            x0, y0, x1, y1 = self.footprint_utm(dx, dy, width, length)
+            return np.array([(x0, y1), (x1, y1), (x1, y0), (x0, y0)])
+        f, l = (np.array(v) for v in radar_basis(self.flight_az_grid(heading)))
+        c = np.array((self.cx, self.cy)) + dy * f + dx * l
+        return np.array([c + sa * length / 2 * f + sg * width / 2 * l for sa, sg in ((-1, -1), (-1, 1), (1, 1), (1, -1))])
+
+    def reach_utm(self, width: float = SCENE_WIDTH_M, length: float = SCENE_LENGTH_M,
+                  geometry: str = 'north-up', headings: Sequence[float] = RCM_HEADINGS) -> tuple:
+        """Bounding box covering every possible scene position (all headings in radar geometry)."""
+        if geometry == 'north-up':
+            dxr, dyr = self.offset_ranges(width, length)
+            return (self.cx + dxr[0] - width / 2, self.cy + dyr[0] - length / 2,
+                    self.cx + dxr[1] + width / 2, self.cy + dyr[1] + length / 2)
+        pts = []
+        for h in headings:
+            dxr, dyr = self.offset_ranges(width, length, 'radar', h)
+            for dx in dxr:
+                for dy in dyr:
+                    pts.append(self.footprint_corners(dx, dy, width, length, 'radar', h))
+        pts = np.concatenate(pts)
+        return (pts[:, 0].min(), pts[:, 1].min(), pts[:, 0].max(), pts[:, 1].max())
 
     def utm_rect_to_lonlat(self, rect: Sequence[float], n: int = 8) -> Polygon:
         xmin, ymin, xmax, ymax = rect
@@ -188,7 +246,7 @@ class AOI:
 
     # -- weather crops ------------------------------------------------------
     def weather_bounds(self, **kw) -> tuple[float, float, float, float]:
-        """SNWE bounds passed to RAiDER's prepareWeatherModel (all scene positions + margin)."""
+        """SNWE bounds passed to RAiDER (north-up reach + margin; also covers radar-geometry scenes)."""
         W, S, E, N = self.reach_lonlat(**kw).bounds
         dlat = WEATHER_MARGIN_KM / 111.2
         dlon = WEATHER_MARGIN_KM / (111.32 * math.cos(math.radians(self.lat)))
@@ -220,7 +278,7 @@ def volcano_aoi(label: str, region: str, polygon: Polygon) -> AOI:
         cx=float(c.x), cy=float(c.y),
         dx_range=_offset_range(minx, maxx, c.x, SCENE_WIDTH_M),
         dy_range=_offset_range(miny, maxy, c.y, SCENE_LENGTH_M),
-        polygon_lonlat=polygon, poly_bounds_utm=(minx, miny, maxx, maxy),
+        polygon_lonlat=polygon, poly_bounds_utm=(minx, miny, maxx, maxy), poly_utm=poly_utm,
     )
 
 
@@ -267,7 +325,8 @@ def select_aois(aois: Sequence[AOI], names: Optional[Sequence[str]]) -> list[AOI
     return [lookup[n] for n in names]
 
 
-def overlap_groups(aois: Sequence[AOI], width: float = SCENE_WIDTH_M, length: float = SCENE_LENGTH_M) -> list[list[str]]:
+def overlap_groups(aois: Sequence[AOI], width: float = SCENE_WIDTH_M, length: float = SCENE_LENGTH_M,
+                   geometry: str = 'north-up', headings: Sequence[float] = RCM_HEADINGS) -> list[list[str]]:
     """Group AOIs whose possible scene footprints can overlap (union-find).
 
     Grouped AOIs always go into the same train/validation split, so no
@@ -281,7 +340,7 @@ def overlap_groups(aois: Sequence[AOI], width: float = SCENE_WIDTH_M, length: fl
             n = parent[n]
         return n
 
-    reach = {a.name: a.reach_lonlat(width=width, length=length) for a in aois}
+    reach = {a.name: a.reach_lonlat(width=width, length=length, geometry=geometry, headings=headings) for a in aois}
     for i, a in enumerate(aois):
         for b in aois[i + 1:]:
             if reach[a.name].intersects(reach[b.name]):

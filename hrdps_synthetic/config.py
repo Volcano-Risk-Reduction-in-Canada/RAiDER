@@ -14,9 +14,11 @@ Layout:
 * **top-level keys** apply to every command that has that option. For example,
   ``workdir``, ``width_km`` and ``chip_size`` are shared, which keeps
   ``download``, ``generate`` and ``tile`` consistent;
-* **sections** ``download:``, ``generate:`` and ``tile:`` apply to that command
+* **sections** ``download:``, ``generate:``, ``tile:`` and ``rgb:`` apply to that command
   only and take precedence over top-level keys;
 * a key set to ``null`` (or left out) keeps the built-in default.
+* ``rgb:`` with a mapping is the rgb command's section; ``rgb: true/false`` at the
+  top level is the RGB switch of ``generate`` and ``tile``.
 
 ``--print-config`` shows the fully resolved settings and exits. Real runs save
 them to ``<workdir>/settings_<command>.yaml`` for provenance.
@@ -35,7 +37,7 @@ from typing import Any, Optional, Sequence
 
 import yaml
 
-SECTIONS = ('download', 'generate', 'tile')
+SECTIONS = ('download', 'generate', 'tile', 'rgb')
 _RUN_ONLY = {'help', 'config', 'print_config'}
 EXAMPLE = Path(__file__).resolve().parent / 'config.example.yaml'
 
@@ -82,10 +84,10 @@ def _options(parser: argparse.ArgumentParser) -> dict[str, argparse.Action]:
 
 
 def _all_parsers() -> dict[str, argparse.ArgumentParser]:
-    from hrdps_synthetic import aois, download, generate, tile
+    from hrdps_synthetic import aois, download, generate, rgb, tile
 
     return {'aois': aois.build_parser(), 'download': download.build_parser(),
-            'generate': generate.build_parser(), 'tile': tile.build_parser()}
+            'generate': generate.build_parser(), 'tile': tile.build_parser(), 'rgb': rgb.build_parser()}
 
 
 def _coerce(action: argparse.Action, value: Any, where: str) -> Any:
@@ -130,13 +132,13 @@ def resolve(doc: dict, command: str, parser: argparse.ArgumentParser) -> dict[st
     known_anywhere = set().union(*(_options(p) for p in _all_parsers().values()))
     top, sections = {}, {}
     for k, v in doc.items():
-        if k in SECTIONS:
-            if v is None:
-                continue
-            if not isinstance(v, dict):
-                raise ConfigError(f'section {k!r} must be a mapping of settings')
+        if k in SECTIONS and isinstance(v, dict):
             sections[k] = {_norm(kk): vv for kk, vv in v.items()}
-        else:
+        elif k in SECTIONS and v is None:
+            continue
+        elif k in SECTIONS and _norm(k) not in known_anywhere:
+            raise ConfigError(f'section {k!r} must be a mapping of settings')
+        else:  # e.g. `rgb: false` is the generate/tile option, `rgb: {...}` the rgb command's section
             top[_norm(k)] = v
     unknown = sorted(k for k in top if k not in known_anywhere)
     if unknown:

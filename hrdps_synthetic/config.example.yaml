@@ -5,7 +5,7 @@
 #
 # Precedence: built-in defaults < this file < options typed on the command line.
 #   - Top-level keys apply to every command that has that option.
-#   - The download / generate / tile sections apply to that command only and
+#   - The download / generate / tile / rgb sections apply to that command only and
 #     take precedence over top-level keys.
 #   - null (or leaving a key out) keeps the built-in default.
 #
@@ -17,15 +17,16 @@
 # Real runs save their resolved settings to <workdir>/settings_<command>.yaml.
 
 # --- shared --------------------------------------------------------------------
-workdir: /data/hrdps_synth  # required by download, generate and tile
+workdir: /data/hrdps_synth  # required by download, generate, tile and rgb (holds epochs/ and dem/)
+output_dir: null            # null = the workdir; folder for plan, manifest, samples and chips
 aoi_file: null              # null = the shipped volcano_aois.geojson; or a VRRC API dump
 aois: null                  # null = all 45 AOIs; or a list of AOI names
 seed: 0                     # sample plan and train/val split (generate), KMZ split preview (aois)
 
 # Scene footprint. download uses it to size the weather crops, so set it to the
 # largest scene you will render; generate uses it as the scene size.
-width_km: 20.0              # east-west
-length_km: 30.0             # north-south
+width_km: 20.0              # across-track (radar) or east-west (north-up)
+length_km: 30.0             # along-track (radar) or north-south (north-up)
 
 # --- python -m hrdps_synthetic.download -------------------------------------------
 download:
@@ -47,9 +48,11 @@ generate:
   inc_range: [20.0, 55.0]   # scene-centre incidence range (deg)
   heading_asc: 348.0
   heading_desc: 192.0
+  geometry: radar           # radar = magmatic layout (rows along-track, cols across-track); or north-up
   width_px: null            # scene size in pixels; overrides width_km
   height_px: null           # overrides length_km
   spacing: 10.0             # pixel spacing (m)
+  rgb: true                 # false-colour RGB of the wrapped phase (0 rad = red)
   chip_size: null           # e.g. [500] (square) or [500, 500]; also cut every scene into chips
   chip_stride: null         # null = chip size (no overlap)
   chip_edge: drop           # drop | shift: what to do with a remainder narrower than a chip
@@ -65,5 +68,15 @@ tile:
   chip_size: [500]          # required by tile; 500 x 500 px for Detectron2
   chip_stride: null
   chip_edge: drop
+  rgb: true                 # also write RGB chips
+  sign: auto                # RGB sign: auto (current convention, flips legacy scenes) | keep | flip
   split: null               # null = both; or train | val
+  workers: null             # null = CPU count - 1
+
+# --- python -m hrdps_synthetic.rgb (RGB for wrapped phase already on disk) --------
+rgb:
+  scenes: true              # scenes listed in manifest.csv
+  chips: true               # chips listed in every chips_*/chips.csv
+  sign: auto                # auto | keep | flip (see rgb.py)
+  overwrite: false
   workers: null             # null = CPU count - 1

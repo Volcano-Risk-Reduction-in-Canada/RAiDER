@@ -85,7 +85,8 @@ def test_print_config(tmp_path, capsys):
 
 def test_example_file_is_valid_and_matches_builtin_defaults():
     doc = config.load_yaml(config.EXAMPLE)
-    placeholders = {('download', 'workdir'), ('generate', 'workdir'), ('tile', 'workdir'), ('tile', 'chip_size')}
+    placeholders = {('download', 'workdir'), ('generate', 'workdir'), ('tile', 'workdir'), ('rgb', 'workdir'),
+                    ('tile', 'chip_size')}
     for cmd, parser in config._all_parsers().items():
         values = config.resolve(doc, cmd, parser)
         defaults = {a.dest: a.default for a in parser._actions}
@@ -107,3 +108,13 @@ def test_run_saves_resolved_settings(fake_workdir, tmp_path):
     assert saved.exists()
     s = yaml.safe_load(saved.read_text())['generate']
     assert s['width_px'] == 200 and s['limit'] == 1 and s['n_train'] == 4
+
+
+def test_rgb_option_and_rgb_section_coexist(tmp_path):
+    from hrdps_synthetic import rgb as rgb_cmd
+
+    cfg = _yaml(tmp_path, 'workdir: /w\nrgb: false\n')
+    assert _parse(generate, 'generate', ['--config', str(cfg)]).rgb is False
+    cfg = _yaml(tmp_path, 'workdir: /w\nrgb:\n  sign: keep\n')
+    assert _parse(rgb_cmd, 'rgb', ['--config', str(cfg)]).sign == 'keep'
+    assert _parse(generate, 'generate', ['--config', str(cfg)]).rgb is True

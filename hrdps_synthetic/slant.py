@@ -3,10 +3,13 @@
 Only the projected mapping is implemented (the agreed default until RAiDER
 raytracing is validated):
 
-    dSTD = (ZTD_ref - ZTD_sec)(lat, lon, h) / cos(theta)
+    dSTD = (ZTD_sec - ZTD_ref)(lat, lon, h) / cos(theta)
+    phase = 4 pi / wavelength x dSTD
 
-with ZTD = wet_total + hydro_total from RAiDER. Both epochs of an AOI share one
-lat/lon/z grid, so the cubes are differenced first and interpolated once.
+with ZTD = wet_total + hydro_total from RAiDER. Positive phase is more delay
+(range increase) on the later date, as subsidence would produce; no change is
+0 rad. Both epochs of an AOI share one lat/lon/z grid, so the cubes are
+differenced first and interpolated once.
 Interpolation is trilinear on the epoch grid (the same (y, x, z) linear scheme
 as ``RAiDER.delayFcns.getInterpolators``), so differencing first is exact.
 """
@@ -46,11 +49,12 @@ def regular_axis(a: np.ndarray, name: str) -> tuple[float, float]:
     return float(a[0]), float(d.mean())
 
 
-def delta_ztd(ref: Epoch, sec: Epoch) -> np.ndarray:
+def delta_ztd(a: Epoch, b: Epoch) -> np.ndarray:
+    """ZTD cube of `a` minus that of `b` (call as delta_ztd(sec, ref))."""
     for k in ('x', 'y', 'z'):
-        if not np.array_equal(getattr(ref, k), getattr(sec, k)):
-            raise ValueError(f'Epoch grids differ on {k}: {ref.path} vs {sec.path}')
-    return ref.total - sec.total
+        if not np.array_equal(getattr(a, k), getattr(b, k)):
+            raise ValueError(f'Epoch grids differ on {k}: {a.path} vs {b.path}')
+    return a.total - b.total
 
 
 def epoch_indices(epoch: Epoch, lon: np.ndarray, lat: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -78,7 +82,7 @@ def project(dztd: np.ndarray, theta_deg: np.ndarray, method: str = 'projected') 
 
 
 def to_phase(dstd: np.ndarray, wavelength: float) -> tuple[np.ndarray, np.ndarray]:
-    """Unwrapped phase = 4*pi/lambda * dSTD (radians) and its wrap to [-pi, pi)."""
+    """Unwrapped phase = 4*pi/lambda * dSTD (radians) and its wrap to [-pi, pi); 0 stays 0."""
     unw = (4.0 * math.pi / wavelength) * dstd.astype(np.float64)
     wrp = np.mod(unw + math.pi, 2.0 * math.pi) - math.pi
     return unw.astype(np.float32), wrp.astype(np.float32)

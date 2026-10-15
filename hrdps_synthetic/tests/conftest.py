@@ -30,18 +30,24 @@ def write_epoch(path: Path, aoi, scale=1.0, tilt=0.0):
     return path
 
 
+def fake_height(x, y):
+    return 1000 + 800 * np.sin(np.asarray(x) / 3000.0) * np.cos(np.asarray(y) / 4000.0)
+
+
 def write_fake_dem(workdir: Path, aoi, width_m: float, length_m: float, spacing: float = 10.0):
-    """Smooth synthetic topography covering every scene position of `aoi` (no network)."""
+    """Smooth synthetic topography covering every north-up and radar scene of `aoi` (no network)."""
     import rasterio
     from rasterio.transform import from_origin
 
     from hrdps_synthetic.dem import dem_extent, dem_path
 
-    xmin, ymin, xmax, ymax = dem_extent(aoi, width_m, length_m, spacing)
+    ext = [dem_extent(aoi, width_m, length_m, spacing, geometry=g) for g in ('north-up', 'radar')]
+    xmin, ymin = min(e[0] for e in ext), min(e[1] for e in ext)
+    xmax, ymax = max(e[2] for e in ext), max(e[3] for e in ext)
     nx, ny = int(round((xmax - xmin) / spacing)), int(round((ymax - ymin) / spacing))
     x = xmin + (np.arange(nx) + 0.5) * spacing
     y = ymax - (np.arange(ny) + 0.5) * spacing
-    h = (1000 + 800 * np.sin(x[None, :] / 3000.0) * np.cos(y[:, None] / 4000.0)).astype(np.float32)
+    h = fake_height(x[None, :], y[:, None]).astype(np.float32)
     path = dem_path(workdir, aoi, spacing)
     path.parent.mkdir(parents=True, exist_ok=True)
     with rasterio.open(path, 'w', driver='GTiff', dtype='float32', width=nx, height=ny, count=1,
